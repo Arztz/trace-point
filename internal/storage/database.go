@@ -140,7 +140,7 @@ func (d *Database) runMigrations(ctx context.Context) error {
 
 	logger.Info("Running migrations from version %d to %d", currentVersion, schemaVersion)
 
-	// Run migrations
+	// Run migrations - execute each migration as a single statement
 	migrations := []struct {
 		version int
 		sql     string
@@ -148,7 +148,6 @@ func (d *Database) runMigrations(ctx context.Context) error {
 		{
 			version: 1,
 			sql: `
-				-- SpikeEvents table
 				CREATE TABLE IF NOT EXISTS spike_events (
 					id TEXT PRIMARY KEY,
 					timestamp TEXT NOT NULL,
@@ -169,12 +168,12 @@ func (d *Database) runMigrations(ctx context.Context) error {
 					created_at TEXT NOT NULL DEFAULT (datetime('now'))
 				);
 
-				-- Create indexes for spike_events
 				CREATE INDEX IF NOT EXISTS idx_spike_timestamp ON spike_events(timestamp);
+
 				CREATE INDEX IF NOT EXISTS idx_spike_pod ON spike_events(pod_name, namespace);
+
 				CREATE INDEX IF NOT EXISTS idx_spike_cooldown ON spike_events(cooldown_end);
 
-				-- Config table
 				CREATE TABLE IF NOT EXISTS config (
 					id TEXT PRIMARY KEY,
 					key TEXT NOT NULL UNIQUE,
@@ -191,10 +190,11 @@ func (d *Database) runMigrations(ctx context.Context) error {
 		if migration.version > currentVersion {
 			logger.Debug("Applying migration v%d", migration.version)
 
-			// Split and execute each statement
+			// Execute each statement individually
 			statements := strings.Split(migration.sql, ";")
 			for _, stmt := range statements {
 				stmt = strings.TrimSpace(stmt)
+				// Skip empty statements and comments
 				if stmt == "" || strings.HasPrefix(stmt, "--") {
 					continue
 				}
