@@ -1,0 +1,72 @@
+# Trace-Point Configuration
+# Resource-to-Code Correlation Engine
+
+app:
+  host: "0.0.0.0"
+  port: 8080
+  mode: "debug"  # debug, info, warn, error
+
+# Prometheus integration
+prometheus:
+  url: "http://localhost:9090"
+  timeout: 30s
+  scrape_interval: 15s
+  query_path: "/api/v1/query"
+
+# SigNoz integration
+signoz:
+  url: "http://localhost:3301"
+  otlp_http: "http://localhost:3301/v1/traces"
+  timeout: 30s
+  query_path: "/api/v2/query"
+
+# Google Cloud integration
+gcloud:
+  project_id: ""
+  region: "us-central1"
+  cluster_name: ""
+  service_account_key: ""  # path to JSON key file
+  use_gke: false
+
+# Anomaly detection settings
+detection:
+  cpu_threshold: 80      # percentage
+  memory_threshold: 85   # percentage
+  latency_threshold: 1000  # ms
+  error_rate_threshold: 5  # percentage
+  window_size: 5m        # detection window
+  min_samples: 3          # minimum data points
+
+# Discord notifications
+discord:
+  enabled: false
+  webhook_url: ""
+  mention_user: ""      # user ID to mention
+  mention_role: ""      # role ID to mention
+  alerts:
+    - critical
+    - warning
+
+# Database settings
+database:
+  type: "sqlite"  # sqlite, postgres
+  path: "./data/trace-point.db"
+  max_connections: 25
+  idle_connections: 10
+
+# Kubernetes namespaces to monitor
+namespaces:
+  - "default"
+  - "production"
+  - "staging"
+
+# Pod patterns to exclude from monitoring
+pod_exclude_patterns:
+  - "^kube-"
+  - "^system-"
+
+# Profiler integration
+profiler:
+  enabled: false
+  pyroscope_url: ""
+  interval: 10s
