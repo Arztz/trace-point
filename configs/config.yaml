@@ -8,7 +8,7 @@ app:
 
 # Prometheus integration
 prometheus:
-  url: "http://localhost:9090"
+  url: "http://prod.prometheus.fundii-prod.internal"
   timeout: 30s
   scrape_interval: 15s
   query_path: "/api/v1/query"
@@ -56,9 +56,7 @@ database:
 
 # Kubernetes namespaces to monitor
 namespaces:
-  - "default"
-  - "production"
-  - "staging"
+  - "fundii"
 
 # Pod patterns to exclude from monitoring
 pod_exclude_patterns:

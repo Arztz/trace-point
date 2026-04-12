@@ -13,7 +13,9 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/trace-point/trace-point/internal/config"
+	"github.com/trace-point/trace-point/internal/correlation"
 	"github.com/trace-point/trace-point/internal/integration/discord"
+	"github.com/trace-point/trace-point/internal/integration/prometheus"
 	"github.com/trace-point/trace-point/internal/server/handlers"
 	"github.com/trace-point/trace-point/internal/storage"
 	"github.com/trace-point/trace-point/internal/utils/logger"
@@ -70,10 +72,26 @@ func main() {
 		logger.Info("Discord notifications enabled")
 	}
 
+	// Initialize Prometheus client
+	logger.Info("Initializing Prometheus client...")
+	prometheusClient := prometheus.NewClient(&cfg.Prometheus, logger.Default())
+
+	// Test Prometheus connection
+	testCtx, testCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	var connected bool
+	_, queryErr := prometheusClient.Query(testCtx, "up", time.Now())
+	if queryErr != nil {
+		logger.Warn("Failed to connect to Prometheus: %v (spike detection will be disabled)", queryErr)
+	} else {
+		connected = true
+		logger.Info("Connected to Prometheus: %s", cfg.Prometheus.URL)
+	}
+	testCancel()
+
 	// API routes
 	router.Route("/api/v1", func(r chi.Router) {
 		// Register all handlers (spikes, timeline, config, export, gravity-scores)
-		handlers.RegisterRoutesWithRepo(r, repo)
+		handlers.RegisterRoutesWithRepo(r, repo, prometheusClient, cfg)
 
 		r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte("{\"status\": \"ok\", \"message\": \"Trace-Point API v1\"}"))
@@ -91,6 +109,96 @@ func main() {
 
 	// Store discord client in global for alerting (optional enhancement)
 	_ = discordClient
+
+	if !connected {
+		logger.Warn("Prometheus not available - skipping spike detection polling")
+	} else {
+		// Initialize spike detector with config values
+		detectorConfig := correlation.DefaultDetectorConfig()
+
+		// Apply config overrides
+		if cfg.Detection.CPUThreshold > 0 {
+			detectorConfig.ThresholdPercent = float64(cfg.Detection.CPUThreshold)
+		}
+		if cfg.Detection.WindowSize > 0 {
+			detectorConfig.MovingAverageWindowMinutes = int(cfg.Detection.WindowSize.Minutes())
+		}
+		if cfg.Detection.MinSamples > 0 {
+			// Apply min samples setting if needed
+		}
+
+		detector := correlation.NewSpikeDetector(detectorConfig, logger.Default())
+		logger.Info("Spike detector initialized | threshold=%.0f%% | window=%dm | polling=%ds",
+			detectorConfig.ThresholdPercent,
+			detectorConfig.MovingAverageWindowMinutes,
+			detectorConfig.PollingIntervalSeconds,
+		)
+
+		// Start spike detection polling loop in goroutine
+		go func() {
+			ticker := time.NewTicker(time.Duration(detectorConfig.PollingIntervalSeconds) * time.Second)
+			defer ticker.Stop()
+
+			logger.Info("Starting Prometheus metrics polling every %d seconds...", detectorConfig.PollingIntervalSeconds)
+
+			// Initial poll
+			detectorCtx, detectorCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			spikes, err := detector.DetectSpikes(detectorCtx, prometheusClient, cfg.Namespaces, nil)
+			if err != nil {
+				logger.Error("Initial spike detection error: %v", err)
+			} else if len(spikes) > 0 {
+				logger.Info("Initial scan: %d spike(s) detected", len(spikes))
+				// Save initial spikes to database
+				for _, spike := range spikes {
+					storageModel := spike.ToStorageModel()
+					if err := repo.CreateSpikeEvent(context.Background(), storageModel); err != nil {
+						logger.Error("Failed to save initial spike to database: %v", err)
+					} else {
+						logger.Info("Initial spike saved to database: %s/%s", spike.Namespace, spike.PodName)
+					}
+				}
+			} else {
+				logger.Debug("Initial scan: no spikes detected")
+			}
+			detectorCancel()
+
+			for {
+				select {
+				case <-ticker.C:
+					detectorCtx, detectorCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					spikes, err := detector.DetectSpikes(detectorCtx, prometheusClient, cfg.Namespaces, nil)
+					if err != nil {
+						logger.Error("Spike detection error: %v", err)
+						detectorCancel()
+						continue
+					}
+
+					if len(spikes) > 0 {
+						logger.Info("=== SPIKE DETECTED: %d spike(s)! ===", len(spikes))
+						for _, spike := range spikes {
+							logger.Info("  -> %s/%s | CPU: %.1f%% | RAM: %.1f%% | threshold: %.0f%%",
+								spike.Namespace, spike.PodName, spike.CPUPercent, spike.RAMPercent, spike.ThresholdPercent)
+
+							// Log detected spikes for debugging
+							logger.Debug("Spike alert: namespace=%s pod=%s cpu=%.1f%% ram=%.1f%% threshold=%.0f%%",
+								spike.Namespace, spike.PodName, spike.CPUPercent, spike.RAMPercent, spike.ThresholdPercent)
+
+							// Save spike to database
+							storageModel := spike.ToStorageModel()
+							if err := repo.CreateSpikeEvent(context.Background(), storageModel); err != nil {
+								logger.Error("Failed to save spike to database: %v", err)
+							} else {
+								logger.Info("Spike saved to database: %s/%s", spike.Namespace, spike.PodName)
+							}
+						}
+					} else {
+						logger.Debug("Polling: no spikes detected")
+					}
+					detectorCancel()
+				}
+			}
+		}()
+	}
 
 	// Start server in goroutine
 	go func() {

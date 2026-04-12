@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { SpikeListResponse, TimelineData, ConfigResponse, GravityScoresResponse, SpikeEvent } from '../types';
+import type { SpikeListResponse, TimelineData, ConfigResponse, GravityScoresResponse, SpikeEvent, TimelineResponse } from '../types';
 
 const apiClient = axios.create({
   baseURL: '/api/v1',
@@ -41,8 +41,10 @@ export const api = {
       namespace?: string;
       podName?: string;
     }): Promise<TimelineData> => {
-      const response = await apiClient.get<TimelineData>('/timeline', { params });
-      return response.data;
+      // The API now returns TimelineResponse with metrics and spike_markers
+      // The Dashboard transformer handles the conversion to TimelineData
+      const response = await apiClient.get<TimelineResponse>('/timeline', { params });
+      return response.data as unknown as TimelineData;
     },
   },
   

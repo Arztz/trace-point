@@ -32,3 +32,25 @@ type Config struct {
 	Value     string    `json:"value"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
+
+// TimelineMetric represents continuous CPU/RAM metrics for timeline visualization.
+type TimelineMetric struct {
+	ID         int64     `json:"id,omitempty"`
+	Timestamp  time.Time `json:"timestamp"`
+	PodName    string    `json:"pod_name"`
+	Namespace  string    `json:"namespace"`
+	CPUPercent float64   `json:"cpu_percent"`
+	RAMPercent float64   `json:"ram_percent"`
+	CreatedAt  time.Time `json:"created_at,omitempty"`
+}
+
+// SpikeMarker represents a spike event for timeline overlay.
+type SpikeMarker struct {
+	Timestamp time.Time `json:"timestamp"`
+	PodName   string    `json:"pod_name"`
+	Namespace string    `json:"namespace"`
+	CPUSpike  bool      `json:"cpu_spike"`
+	RAMSpike  bool      `json:"ram_spike"`
+	RouteName string    `json:"route_name,omitempty"`
+	TraceID   string    `json:"trace_id,omitempty"`
+}

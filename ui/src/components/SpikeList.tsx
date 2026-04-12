@@ -9,6 +9,68 @@ interface SpikeListProps {
   onSelect: (id: string) => void;
 }
 
+// Transform raw backend data to frontend format
+interface TransformedSpike {
+  id: string;
+  timestamp: string;
+  podName: string;
+  namespace: string;
+  resourceType: 'cpu' | 'memory';
+  threshold: number;
+  currentValue: number;
+  movingAverage: number;
+  activeRoutes: string[];
+  possibleRootCauses: Array<{ route: string; functionName: string; confidence: number; filePath: string }>;
+}
+
+function transformSpike(raw: Record<string, unknown>): TransformedSpike {
+  // Handle both formats: frontend format and raw backend database format
+  const isFrontendFormat = 'resourceType' in raw && raw.resourceType !== undefined;
+  
+  if (isFrontendFormat) {
+    return {
+      id: String(raw.id || ''),
+      timestamp: String(raw.timestamp || ''),
+      podName: String(raw.podName || ''),
+      namespace: String(raw.namespace || ''),
+      resourceType: String(raw.resourceType || 'cpu') as 'cpu' | 'memory',
+      threshold: Number(raw.threshold) || 0,
+      currentValue: Number(raw.currentValue) || 0,
+      movingAverage: Number(raw.movingAverage) || 0,
+      activeRoutes: Array.isArray(raw.activeRoutes) ? raw.activeRoutes : [],
+      possibleRootCauses: Array.isArray(raw.possibleRootCauses) ? raw.possibleRootCauses : [],
+    };
+  }
+  
+  // Raw backend format - map to frontend format
+  // Database fields: pod_name, namespace, cpu_usage_percent, ram_usage_percent, threshold_percent, moving_average_percent
+  const cpuUsage = Number(raw.cpu_usage_percent || raw.cpuUsagePercent || 0);
+  const ramUsage = Number(raw.ram_usage_percent || raw.ramUsagePercent || 0);
+  const threshold = Number(raw.threshold_percent || raw.thresholdPercent || 50);
+  const avg = Number(raw.moving_average_percent || raw.movingAveragePercent || 0);
+  
+  // Determine resource type based on which has higher usage
+  const resourceType: 'cpu' | 'memory' = cpuUsage >= ramUsage ? 'cpu' : 'memory';
+  const currentValue = resourceType === 'cpu' ? cpuUsage : ramUsage;
+  
+  // Get route name if available
+  const routeName = raw.route_name || raw.routeName;
+  const activeRoutes = routeName ? [String(routeName)] : [];
+  
+  return {
+    id: String(raw.id || ''),
+    timestamp: String(raw.timestamp || raw.created_at || ''),
+    podName: String(raw.pod_name || raw.podName || ''),
+    namespace: String(raw.namespace || ''),
+    resourceType,
+    threshold,
+    currentValue,
+    movingAverage: avg,
+    activeRoutes,
+    possibleRootCauses: [],
+  };
+}
+
 function formatTime(timestamp: string): string {
   const date = new Date(timestamp);
   return date.toLocaleString('en-US', {
@@ -20,6 +82,7 @@ function formatTime(timestamp: string): string {
 }
 
 function getSpikeSeverity(currentValue: number, movingAverage: number): 'critical' | 'warning' | 'normal' {
+  if (movingAverage <= 0) return 'normal';
   const ratio = currentValue / movingAverage;
   if (ratio >= 3) return 'critical';
   if (ratio >= 2) return 'warning';
@@ -54,7 +117,10 @@ function getResourceColor(resourceType: string): string {
 export default function SpikeList({ spikes, selectedId, onSelect }: SpikeListProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  if (spikes.length === 0) {
+  // Transform spikes to handle both formats
+  const transformedSpikes = spikes.map(s => transformSpike(s as unknown as Record<string, unknown>));
+
+  if (transformedSpikes.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center">
         <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4">
@@ -73,11 +139,13 @@ export default function SpikeList({ spikes, selectedId, onSelect }: SpikeListPro
 
   return (
     <div className="space-y-3 max-h-[500px] overflow-y-auto custom-scrollbar pr-1">
-      {spikes.map((spike) => {
+      {transformedSpikes.map((spike) => {
         const severity = getSpikeSeverity(spike.currentValue, spike.movingAverage);
         const isExpanded = expandedId === spike.id;
         const isSelected = selectedId === spike.id;
-        const spikeRatio = ((spike.currentValue / spike.movingAverage) * 100 - 100).toFixed(0);
+        const spikeRatio = spike.movingAverage > 0 
+          ? ((spike.currentValue / spike.movingAverage) * 100 - 100).toFixed(0)
+          : '0';
 
         return (
           <div

@@ -8,110 +8,128 @@ import (
 // Query builders for Prometheus metrics
 
 // BuildCPUUtilizationQuery builds a query for CPU utilization percentage
-// Formula: container_cpu_usage_seconds_total / container_spec_cpu_quota
-// Returns: percentage of CPU used vs CPU limit
+// Formula: container_cpu_usage_seconds_total / kube_pod_container_resource_requests (cpu)
+// Returns: percentage of CPU used vs CPU request
 func BuildCPUUtilizationQuery(namespaces []string, excludePatterns []string) string {
-	var conditions []string
+	// Build selector conditions for metrics
+	var selectorConditions []string
 
-	// Filter by namespace if specified
+	// Always exclude empty containers
+	selectorConditions = append(selectorConditions, `container!=""`)
+
+	// Filter by namespace if specified - put inside metric selector
 	if len(namespaces) > 0 {
 		nsConditions := make([]string, len(namespaces))
 		for i, ns := range namespaces {
 			nsConditions[i] = fmt.Sprintf(`namespace="%s"`, ns)
 		}
-		conditions = append(conditions, fmt.Sprintf("(%s)", strings.Join(nsConditions, "|")))
+		selectorConditions = append(selectorConditions, fmt.Sprintf("%s", strings.Join(nsConditions, "|")))
 	}
 
-	// Exclude patterns if specified
+	// Exclude patterns if specified - put inside metric selector
 	for _, pattern := range excludePatterns {
-		conditions = append(conditions, fmt.Sprintf(`pod!~"%s"`, pattern))
+		selectorConditions = append(selectorConditions, fmt.Sprintf(`pod!~"%s"`, pattern))
 	}
 
-	// Base query: CPU usage / CPU limit as percentage
-	query := `sum(rate(container_cpu_usage_seconds_total{container!=""}[5m])) by (pod, namespace, container) / sum(container_spec_cpu_quota{container!=""}) by (pod, namespace, container) * 100`
+	selector := strings.Join(selectorConditions, ", ")
 
-	if len(conditions) > 0 {
-		query += fmt.Sprintf(" and %s", strings.Join(conditions, ", "))
-	}
+	// Base query: CPU usage / CPU request as percentage
+	// Using kube_pod_container_resource_requests for CPU request instead of container_spec_cpu_quota
+	query := fmt.Sprintf(
+		`sum(rate(container_cpu_usage_seconds_total{%s}[5m])) by (pod, namespace, container) / sum(kube_pod_container_resource_requests{%s, resource="cpu"}) by (pod, namespace, container) * 100`,
+		selector, selector,
+	)
 
 	return query
 }
 
 // BuildRAMUtilizationQuery builds a query for RAM utilization percentage
-// Formula: container_memory_working_set_bytes / container_spec_memory_limit
-// Returns: percentage of RAM used vs RAM limit
+// Formula: container_memory_working_set_bytes / kube_pod_container_resource_requests (memory)
+// Returns: percentage of RAM used vs RAM request
 func BuildRAMUtilizationQuery(namespaces []string, excludePatterns []string) string {
-	var conditions []string
+	// Build selector conditions for metrics
+	var selectorConditions []string
 
-	// Filter by namespace if specified
+	// Always exclude empty containers
+	selectorConditions = append(selectorConditions, `container!=""`)
+
+	// Filter by namespace if specified - put inside metric selector
 	if len(namespaces) > 0 {
 		nsConditions := make([]string, len(namespaces))
 		for i, ns := range namespaces {
 			nsConditions[i] = fmt.Sprintf(`namespace="%s"`, ns)
 		}
-		conditions = append(conditions, fmt.Sprintf("(%s)", strings.Join(nsConditions, "|")))
+		selectorConditions = append(selectorConditions, fmt.Sprintf("%s", strings.Join(nsConditions, "|")))
 	}
 
-	// Exclude patterns if specified
+	// Exclude patterns if specified - put inside metric selector
 	for _, pattern := range excludePatterns {
-		conditions = append(conditions, fmt.Sprintf(`pod!~"%s"`, pattern))
+		selectorConditions = append(selectorConditions, fmt.Sprintf(`pod!~"%s"`, pattern))
 	}
 
-	// Base query: Working set / Memory limit as percentage
-	query := `container_memory_working_set_bytes{container!=""} / container_spec_memory_limit{container!=""} * 100`
+	selector := strings.Join(selectorConditions, ", ")
 
-	if len(conditions) > 0 {
-		query += fmt.Sprintf(" and %s", strings.Join(conditions, ", "))
-	}
+	// Base query: Working set / Memory request as percentage
+	// Using kube_pod_container_resource_requests for memory request instead of container_spec_memory_limit
+	query := fmt.Sprintf(
+		`sum(rate(container_memory_working_set_bytes{%s}[5m])) by (pod, namespace, container) / sum(rate(kube_pod_container_resource_requests{%s, resource="memory"}[5m])) by (pod, namespace, container) * 100`,
+		selector, selector,
+	)
 
 	return query
 }
 
 // BuildContainerCPUQuery builds a query for a specific container's CPU usage
 func BuildContainerCPUQuery(podName, namespace, containerName string) string {
+	selector := fmt.Sprintf(`pod="%s", namespace="%s", container="%s"`, podName, namespace, containerName)
 	return fmt.Sprintf(
-		`sum(rate(container_cpu_usage_seconds_total{pod="%s", namespace="%s", container="%s"}[5m])) by (pod, namespace, container) / sum(container_spec_cpu_quota{pod="%s", namespace="%s", container="%s"}) by (pod, namespace, container) * 100`,
-		podName, namespace, containerName, podName, namespace, containerName,
+		`sum(rate(container_cpu_usage_seconds_total{%s}[5m])) by (pod, namespace, container) / sum(kube_pod_container_resource_requests{%s, resource="cpu"}) by (pod, namespace, container) * 100`,
+		selector, selector,
 	)
 }
 
 // BuildContainerRAMQuery builds a query for a specific container's RAM usage
 func BuildContainerRAMQuery(podName, namespace, containerName string) string {
+	selector := fmt.Sprintf(`pod="%s", namespace="%s", container="%s"`, podName, namespace, containerName)
 	return fmt.Sprintf(
-		`container_memory_working_set_bytes{pod="%s", namespace="%s", container="%s"} / container_spec_memory_limit{pod="%s", namespace="%s", container="%s"} * 100`,
-		podName, namespace, containerName, podName, namespace, containerName,
+		`sum(rate(container_memory_working_set_bytes{%s}[5m])) by (pod, namespace, container) / sum(rate(kube_pod_container_resource_requests{%s, resource="memory"}[5m])) by (pod, namespace, container) * 100`,
+		selector, selector,
 	)
 }
 
 // BuildPodCPUQuery builds a query for all containers in a pod
 func BuildPodCPUQuery(podName, namespace string) string {
+	selector := fmt.Sprintf(`pod="%s", namespace="%s"`, podName, namespace)
 	return fmt.Sprintf(
-		`sum(rate(container_cpu_usage_seconds_total{pod="%s", namespace="%s"}[5m])) by (pod, namespace, container) / sum(container_spec_cpu_quota{pod="%s", namespace="%s"}) by (pod, namespace, container) * 100`,
-		podName, namespace, podName, namespace,
+		`sum(rate(container_cpu_usage_seconds_total{%s}[5m])) by (pod, namespace, container) / sum(kube_pod_container_resource_requests{%s, resource="cpu"}) by (pod, namespace, container) * 100`,
+		selector, selector,
 	)
 }
 
 // BuildPodRAMQuery builds a query for all containers in a pod
 func BuildPodRAMQuery(podName, namespace string) string {
+	selector := fmt.Sprintf(`pod="%s", namespace="%s"`, podName, namespace)
 	return fmt.Sprintf(
-		`sum(container_memory_working_set_bytes{pod="%s", namespace="%s"}) by (pod, namespace, container) / sum(container_spec_memory_limit{pod="%s", namespace="%s"}) by (pod, namespace, container) * 100`,
-		podName, namespace, podName, namespace,
+		`sum(container_memory_working_set_bytes{%s}) by (pod, namespace, container) / sum(kube_pod_container_resource_requests{%s, resource="memory"}) by (pod, namespace, container) * 100`,
+		selector, selector,
 	)
 }
 
 // BuildNamespaceCPUQuery builds a query for all pods in a namespace
 func BuildNamespaceCPUQuery(namespace string) string {
+	selector := fmt.Sprintf(`namespace="%s"`, namespace)
 	return fmt.Sprintf(
-		`sum(rate(container_cpu_usage_seconds_total{namespace="%s"}[5m])) by (pod, namespace, container) / sum(container_spec_cpu_quota{namespace="%s"}) by (pod, namespace, container) * 100`,
-		namespace, namespace,
+		`sum(rate(container_cpu_usage_seconds_total{%s}[5m])) by (pod, namespace, container) / sum(kube_pod_container_resource_requests{%s, resource="cpu"}) by (pod, namespace, container) * 100`,
+		selector, selector,
 	)
 }
 
 // BuildNamespaceRAMQuery builds a query for all pods in a namespace
 func BuildNamespaceRAMQuery(namespace string) string {
+	selector := fmt.Sprintf(`namespace="%s"`, namespace)
 	return fmt.Sprintf(
-		`sum(container_memory_working_set_bytes{namespace="%s"}) by (pod, namespace, container) / sum(container_spec_memory_limit{namespace="%s"}) by (pod, namespace, container) * 100`,
-		namespace, namespace,
+		`sum(container_memory_working_set_bytes{%s}) by (pod, namespace, container) / sum(kube_pod_container_resource_requests{%s, resource="memory"}) by (pod, namespace, container) * 100`,
+		selector, selector,
 	)
 }
 

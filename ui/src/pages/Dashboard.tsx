@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { FiRefreshCw, FiDownload, FiActivity, FiAlertTriangle, FiTrendingUp, FiServer, FiCalendar } from 'react-icons/fi';
-import { TIME_RANGES, TimelineData, SpikeListResponse } from '../types';
+import { TIME_RANGES, TimelineData, TimelineMetric, SpikeListResponse, PodInfo, AvailablePod } from '../types';
 import { api } from '../services/api';
 import TimelineChart from '../components/TimelineChart';
 import SpikeList from '../components/SpikeList';
@@ -9,18 +9,184 @@ import FilterBar from '../components/FilterBar';
 import TimeRangeSelector from '../components/TimeRangeSelector';
 import SpikeDetail from '../components/SpikeDetail';
 import GravityScoreTable from '../components/GravityScoreTable';
+import PodLegend from '../components/PodLegend';
 import { ChartSkeleton, SpikeListSkeleton, FilterBarSkeleton } from '../components/Skeletons';
 import { EmptyState, ErrorState } from '../components/States';
+
+// Transform raw API response to TimelineData format
+// Handles both new format (prometheus metrics + spike_markers) and legacy format (data_points/events)
+function transformTimelineData(raw: unknown): TimelineData & { metrics?: TimelineMetric[]; availablePods?: PodInfo[] } {
+  // If it's already in the correct format, return it
+  if (raw && typeof raw === 'object' && 'dataPoints' in raw && Array.isArray((raw as Record<string, unknown>).dataPoints)) {
+    return raw as TimelineData & { metrics?: TimelineMetric[]; availablePods?: PodInfo[] };
+  }
+  
+  const data = raw as Record<string, unknown>;
+  
+  // Handle new format: metrics array from Prometheus (preferred)
+  if (data.metrics && Array.isArray(data.metrics)) {
+    const metrics = data.metrics as TimelineMetric[];
+    
+    // Use availablePods from API (replicaset-level aggregated data) if present
+    let availablePods: PodInfo[] = [];
+    if (data.availablePods && Array.isArray(data.availablePods)) {
+      availablePods = (data.availablePods as AvailablePod[]).map(pod => ({
+        name: pod.name,           // Replicaset name
+        namespace: pod.namespace,
+        cpu_percent: pod.current_cpu,
+        ram_percent: pod.current_ram,
+      }));
+    } else {
+      // Fallback: Extract unique pods from metrics (legacy behavior)
+      // Group by replicaset_name since that's the new grouping key
+      const podMap = new Map<string, PodInfo>();
+      for (const metric of metrics) {
+        const key = metric.replicaset_name || metric.pod_name;
+        const existing = podMap.get(key);
+        if (!existing || metric.timestamp > (existing as unknown as TimelineMetric & { timestamp: string }).timestamp) {
+          podMap.set(key, {
+            name: key,
+            namespace: metric.namespace,
+            cpu_percent: metric.cpu_percent,
+            ram_percent: metric.ram_percent,
+          });
+        }
+      }
+      availablePods = Array.from(podMap.values());
+    }
+    
+    // Group by pod_name to support filtering, or aggregate all for unified view
+    // For now, aggregate all metrics into unified data points by timestamp
+    const aggregatedByTimestamp = new Map<string, { cpu: number; ram: number; count: number }>();
+    
+    for (const metric of metrics) {
+      const timestamp = metric.timestamp;
+      const existing = aggregatedByTimestamp.get(timestamp);
+      
+      if (existing) {
+        existing.cpu += metric.cpu_percent;
+        existing.ram += metric.ram_percent;
+        existing.count += 1;
+      } else {
+        aggregatedByTimestamp.set(timestamp, {
+          cpu: metric.cpu_percent,
+          ram: metric.ram_percent,
+          count: 1,
+        });
+      }
+    }
+    
+    // Convert to data points array
+    const dataPoints = Array.from(aggregatedByTimestamp.entries())
+      .map(([timestamp, values]) => ({
+        timestamp,
+        cpu: values.count > 0 ? values.cpu / values.count : 0,
+        ram: values.count > 0 ? values.ram / values.count : 0,
+      }))
+      .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    
+    return {
+      dataPoints,
+      routes: [],
+      startTime: String(data.start_date || data.startDate || ''),
+      endTime: String(data.end_date || data.endDate || ''),
+      metrics,
+      availablePods,
+    };
+  }
+  
+  // Legacy format - transform spike events to timeline data points
+  const rawDataPoints = Array.isArray(data.events) ? data.events : 
+                       Array.isArray(data.data_points) ? data.data_points : 
+                       Array.isArray(data.dataPoint) ? data.dataPoint : [];
+  
+  const dataPoints = rawDataPoints.map((event: Record<string, unknown>) => ({
+    timestamp: String(event.timestamp || event.created_at || ''),
+    cpu: Number(event.cpu_usage_percent || event.cpuUsagePercent || 0),
+    ram: Number(event.ram_usage_percent || event.ramUsagePercent || 0),
+  }));
+  
+  return {
+    dataPoints,
+    routes: [],
+    startTime: String(data.start_date || data.startDate || ''),
+    endTime: String(data.end_date || data.endDate || ''),
+  };
+}
+
+// Transform raw API response to SpikeListResponse format
+function transformSpikesData(raw: unknown): SpikeListResponse {
+  // If it's already in the correct format, return it
+  if (raw && typeof raw === 'object' && 'spikes' in raw && Array.isArray((raw as Record<string, unknown>).spikes)) {
+    return raw as SpikeListResponse;
+  }
+  
+  const data = raw as Record<string, unknown>;
+  
+  // Raw format from backend - transform to frontend format
+  const rawSpikes = Array.isArray(data) ? data : 
+                   Array.isArray(data.events) ? data.events : 
+                   Array.isArray(data.spikes) ? data.spikes : [];
+  
+  const spikes = rawSpikes.map((event: Record<string, unknown>, idx: number) => {
+    const cpuUsage = Number(event.cpu_usage_percent || event.cpuUsagePercent || 0);
+    const ramUsage = Number(event.ram_usage_percent || event.ramUsagePercent || 0);
+    const threshold = Number(event.threshold_percent || event.thresholdPercent || 50);
+    const avg = Number(event.moving_average_percent || event.movingAveragePercent || 0);
+    
+    return {
+      id: String(event.id || `spike-${idx}`),
+      timestamp: String(event.timestamp || event.created_at || ''),
+      podName: String(event.pod_name || event.podName || ''),
+      namespace: String(event.namespace || ''),
+      resourceType: cpuUsage >= ramUsage ? 'cpu' as const : 'memory' as const,
+      threshold,
+      currentValue: cpuUsage >= ramUsage ? cpuUsage : ramUsage,
+      movingAverage: avg,
+      activeRoutes: event.route_name ? [String(event.route_name)] : [],
+      possibleRootCauses: [],
+    };
+  });
+  
+  return {
+    spikes,
+    total: spikes.length,
+    page: 1,
+    pageSize: 100,
+  };
+}
 
 export default function Dashboard() {
   const [timeRange, setTimeRange] = useState('24h');
   const [namespace, setNamespace] = useState('');
   const [podName, setPodName] = useState('');
+  const [selectedPods, setSelectedPods] = useState<string[]>([]);
+  const [highlightedPod, setHighlightedPod] = useState<string | null>(null);
   const [selectedSpikeId, setSelectedSpikeId] = useState<string | null>(null);
   const [showSpikeDetail, setShowSpikeDetail] = useState(false);
   const [activeTab, setActiveTab] = useState<'timeline' | 'gravity'>('timeline');
 
+  // Store deferred values for API calls (updated after debounce)
+  const [debouncedNamespace, setDebouncedNamespace] = useState('');
+  const [debouncedPodName, setDebouncedPodName] = useState('');
+  const [debouncedSelectedPods, setDebouncedSelectedPods] = useState<string[]>([]);
+
   const queryClient = useQueryClient();
+
+  // Debounce filter changes - wait for user to stop typing before API call
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedNamespace(namespace);
+      setDebouncedPodName(podName);
+    }, 500); // Wait 500ms after user stops typing
+
+    return () => clearTimeout(timer);
+  }, [namespace, podName]);
+
+  // Debounce selected pods changes (no delay needed for dropdown selection)
+  useEffect(() => {
+    setDebouncedSelectedPods(selectedPods);
+  }, [selectedPods]);
 
   const handleRefresh = () => {
     queryClient.invalidateQueries({ queryKey: ['timeline'] });
@@ -45,15 +211,32 @@ export default function Dashboard() {
     }
   };
 
-  const { data: timelineData, isLoading: timelineLoading, isError: timelineError } = useQuery<TimelineData>({
-    queryKey: ['timeline', timeRange, namespace, podName],
-    queryFn: () => api.timeline.get({ timeRange, namespace, podName }),
+  const { data: timelineData, isLoading: timelineLoading, isError: timelineError } = useQuery({
+    queryKey: ['timeline', timeRange, debouncedNamespace, debouncedPodName, debouncedSelectedPods.join(',')],
+    queryFn: async () => {
+      const podNameParam = debouncedSelectedPods.length > 0 
+        ? debouncedSelectedPods.join(',') 
+        : debouncedPodName;
+      const raw = await api.timeline.get({ 
+        timeRange, 
+        namespace: debouncedNamespace, 
+        podName: podNameParam 
+      });
+      return transformTimelineData(raw);
+    },
     refetchInterval: 30000,
   });
 
+  // Extract available pods from timeline data
+  const availablePods: PodInfo[] = timelineData?.availablePods || [];
+  const metrics: TimelineMetric[] = timelineData?.metrics || [];
+
   const { data: spikesData, isLoading: spikesLoading, isError: spikesError } = useQuery<SpikeListResponse>({
-    queryKey: ['spikes', namespace, podName],
-    queryFn: () => api.spikes.list({ namespace, podName }),
+    queryKey: ['spikes', debouncedNamespace, debouncedPodName],
+    queryFn: async () => {
+      const raw = await api.spikes.list({ namespace: debouncedNamespace, podName: debouncedPodName });
+      return transformSpikesData(raw);
+    },
     refetchInterval: 30000,
   });
 
@@ -131,8 +314,11 @@ export default function Dashboard() {
             <FilterBar
               namespace={namespace}
               podName={podName}
+              selectedPods={selectedPods}
+              availablePods={availablePods}
               onNamespaceChange={setNamespace}
               onPodNameChange={setPodName}
+              onSelectedPodsChange={setSelectedPods}
             />
           )}
         </div>
@@ -170,6 +356,19 @@ export default function Dashboard() {
                   <span>{new Date().toLocaleTimeString()}</span>
                 </div>
               </div>
+
+              {/* Pod Legend - above chart */}
+              {availablePods.length > 0 && (
+                <div className="px-4 pt-3 border-b border-gray-100">
+                  <PodLegend
+                    pods={availablePods}
+                    selectedPods={selectedPods}
+                    highlightedPod={highlightedPod}
+                    onHighlight={setHighlightedPod}
+                  />
+                </div>
+              )}
+
               <div className="card-body">
                 {timelineLoading ? (
                   <ChartSkeleton />
@@ -178,8 +377,14 @@ export default function Dashboard() {
                     message="Failed to load timeline data. Please try again."
                     onRetry={handleRefresh}
                   />
-                ) : timelineData && timelineData.dataPoints.length > 0 ? (
-                  <TimelineChart data={timelineData} />
+                ) : timelineData && timelineData.dataPoints && timelineData.dataPoints.length > 0 ? (
+                  <TimelineChart 
+                    metrics={metrics}
+                    availablePods={availablePods}
+                    selectedPods={selectedPods}
+                    highlightedPod={highlightedPod}
+                    onHighlight={setHighlightedPod}
+                  />
                 ) : (
                   <EmptyState
                     icon="chart"
@@ -202,7 +407,7 @@ export default function Dashboard() {
                   <div>
                     <h2 className="text-lg font-semibold text-gray-900">Recent Spikes</h2>
                     <p className="text-sm text-gray-500">
-                      {spikesData?.total ?? 0} detected
+                      {(spikesData?.total ?? spikesData?.spikes?.length ?? 0)} detected
                     </p>
                   </div>
                 </div>
@@ -215,7 +420,7 @@ export default function Dashboard() {
                     message="Failed to load spike data."
                     onRetry={handleRefresh}
                   />
-                ) : spikesData && spikesData.spikes.length > 0 ? (
+                ) : spikesData && spikesData.spikes && spikesData.spikes.length > 0 ? (
                   <SpikeList
                     spikes={spikesData.spikes}
                     selectedId={selectedSpikeId}

@@ -15,7 +15,7 @@ import (
 
 const (
 	// Schema version for migrations
-	schemaVersion = 1
+	schemaVersion = 2
 
 	// Default purge days
 	defaultPurgeDays = 7
@@ -44,10 +44,10 @@ func NewDatabase(dbPath string, purgeDays int) (*Database, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// Configure connection pool
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(10)
-	db.SetConnMaxLifetime(5 * time.Minute)
+	// Configure connection pool - reduce for SQLite to avoid lock contention
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(1 * time.Minute)
 
 	// Enable WAL mode
 	if err := enableWALMode(db); err != nil {
@@ -104,10 +104,16 @@ func enableWALMode(db *sql.DB) error {
 		return fmt.Errorf("failed to enable foreign keys: %w", err)
 	}
 
-	// Set busy timeout
-	_, err = db.Exec("PRAGMA busy_timeout=5000")
+	// Set busy timeout to 30 seconds (30000ms) for better concurrency handling
+	_, err = db.Exec("PRAGMA busy_timeout=30000")
 	if err != nil {
 		return fmt.Errorf("failed to set busy timeout: %w", err)
+	}
+
+	// Enable read uncommitted for better concurrency
+	_, err = db.Exec("PRAGMA read_uncommitted=1")
+	if err != nil {
+		return fmt.Errorf("failed to enable read uncommitted: %w", err)
 	}
 
 	return nil
@@ -182,6 +188,24 @@ func (d *Database) runMigrations(ctx context.Context) error {
 				);
 
 				CREATE INDEX IF NOT EXISTS idx_config_key ON config(key);
+			`,
+		},
+		{
+			version: 2,
+			sql: `
+				CREATE TABLE IF NOT EXISTS metrics_cache (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					pod_name TEXT NOT NULL,
+					namespace TEXT NOT NULL,
+					cpu_percent REAL NOT NULL,
+					ram_percent REAL NOT NULL,
+					timestamp DATETIME NOT NULL,
+					created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+				);
+
+				CREATE INDEX IF NOT EXISTS idx_metrics_cache_timestamp ON metrics_cache(timestamp);
+				CREATE INDEX IF NOT EXISTS idx_metrics_cache_namespace ON metrics_cache(namespace);
+				CREATE INDEX IF NOT EXISTS idx_metrics_cache_pod ON metrics_cache(pod_name);
 			`,
 		},
 	}

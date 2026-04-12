@@ -368,8 +368,10 @@ type SpikeAlert struct {
 
 // ToStorageModel converts to storage model
 func (s *SpikeAlert) ToStorageModel() *storage.SpikeEvent {
+	// Generate unique ID using namespace-pod-timestamp to avoid duplicate key errors
+	uniqueID := fmt.Sprintf("%s-%s-%d", s.Namespace, s.PodName, s.Timestamp.Unix())
 	return &storage.SpikeEvent{
-		ID:                   fmt.Sprintf("%s-%s", s.Namespace, s.PodName),
+		ID:                   uniqueID,
 		Timestamp:            s.Timestamp,
 		PodName:              s.PodName,
 		Namespace:            s.Namespace,

@@ -1,25 +1,34 @@
 import { FiFilter, FiX, FiSearch } from 'react-icons/fi';
+import type { PodInfo } from '../types/timeline';
+import PodSelector from './PodSelector';
 
 interface FilterBarProps {
   namespace: string;
   podName: string;
+  selectedPods: string[];
+  availablePods: PodInfo[];
   onNamespaceChange: (value: string) => void;
   onPodNameChange: (value: string) => void;
+  onSelectedPodsChange: (pods: string[]) => void;
   onReset?: () => void;
 }
 
 export default function FilterBar({
   namespace,
   podName,
+  selectedPods,
+  availablePods,
   onNamespaceChange,
   onPodNameChange,
+  onSelectedPodsChange,
   onReset,
 }: FilterBarProps) {
-  const hasFilters = namespace || podName;
+  const hasFilters = namespace || podName || selectedPods.length > 0;
 
   const handleReset = () => {
     onNamespaceChange('');
     onPodNameChange('');
+    onSelectedPodsChange([]);
     onReset?.();
   };
 
@@ -37,7 +46,7 @@ export default function FilterBar({
         )}
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {/* Namespace Input */}
         <div>
           <label 
@@ -69,13 +78,20 @@ export default function FilterBar({
           </div>
         </div>
 
-        {/* Pod Name Input */}
+        {/* Pod Selector */}
+        <PodSelector
+          pods={availablePods}
+          selectedPods={selectedPods}
+          onSelectedPodsChange={onSelectedPodsChange}
+        />
+
+        {/* Pod Name Input (for exact match) */}
         <div>
           <label 
             htmlFor="podName" 
             className="block text-xs font-medium text-gray-600 mb-1.5"
           >
-            Pod Name
+            Pod Name (exact)
           </label>
           <div className="relative">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">

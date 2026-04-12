@@ -6,14 +6,24 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  AreaChart,
-  Area,
   Legend,
 } from 'recharts';
-import type { TimelineData } from '../types';
+import type { TimelineMetric, PodInfo } from '../types/timeline';
+import { POD_COLORS } from '../types/timeline';
+
+interface PodLineData {
+  timestamp: string;
+  time: string;
+  date: string;
+  [key: string]: string | number; // Dynamic pod lines
+}
 
 interface TimelineChartProps {
-  data: TimelineData;
+  metrics?: TimelineMetric[];
+  availablePods?: PodInfo[];
+  selectedPods: string[];
+  highlightedPod: string | null;
+  onHighlight?: (podName: string | null) => void;
 }
 
 interface CustomTooltipProps {
@@ -47,23 +57,21 @@ function formatDate(timestamp: string): string {
 const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
   if (active && payload && payload.length) {
     return (
-      <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 min-w-[160px]">
+      <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 min-w-[200px]">
         <p className="text-xs font-medium text-gray-500 mb-2">{label}</p>
-        {payload.map((entry) => (
-          <div key={entry.dataKey} className="flex items-center justify-between gap-3">
+        {payload.map((entry, idx) => (
+          <div key={idx} className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-1.5">
               <span 
                 className="w-2 h-2 rounded-full" 
                 style={{ backgroundColor: entry.color }}
               />
               <span className="text-xs text-gray-600">
-                {entry.dataKey === 'cpu' ? 'CPU' : 'RAM'}
+                {entry.name}
               </span>
             </div>
             <span className="text-sm font-semibold text-gray-900">
-              {entry.dataKey === 'cpu' 
-                ? `${entry.value.toFixed(1)}%` 
-                : `${entry.value.toFixed(0)} MB`}
+              {entry.value.toFixed(1)}%
             </span>
           </div>
         ))}
@@ -73,29 +81,158 @@ const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
   return null;
 };
 
-export default function TimelineChart({ data }: TimelineChartProps) {
-  const chartData = data.dataPoints.map((point) => ({
-    time: formatTimestamp(point.timestamp),
-    date: formatDate(point.timestamp),
-    cpu: point.cpu,
-    ram: point.ram,
-  }));
-
-  const avgCpu = chartData.length > 0
-    ? (chartData.reduce((sum, d) => sum + d.cpu, 0) / chartData.length).toFixed(1)
-    : '0';
+export default function TimelineChart({
+  metrics = [],
+  availablePods = [],
+  selectedPods = [],
+  highlightedPod = null,
+  onHighlight,
+}: TimelineChartProps) {
+  // Get unique pods from metrics
+  const uniquePods = Array.from(new Set(metrics.map(m => m.pod_name)));
   
-  const avgRam = chartData.length > 0
-    ? (chartData.reduce((sum, d) => sum + d.ram, 0) / chartData.length).toFixed(0)
-    : '0';
+  // Determine which pods to display
+  const displayPods = selectedPods.length === 0
+    ? uniquePods
+    : uniquePods.filter(p => selectedPods.includes(p));
 
-  const maxCpu = chartData.length > 0
-    ? Math.max(...chartData.map(d => d.cpu)).toFixed(1)
-    : '0';
-  
-  const maxRam = chartData.length > 0
-    ? Math.max(...chartData.map(d => d.ram)).toFixed(0)
-    : '0';
+  // Transform metrics into chart data format (one row per timestamp)
+  const chartData = (() => {
+    const dataByTimestamp = new Map<string, PodLineData>();
+    
+    // Sort metrics by timestamp
+    const sortedMetrics = [...metrics].sort((a, b) => 
+      a.timestamp.localeCompare(b.timestamp)
+    );
+
+    for (const metric of sortedMetrics) {
+      if (!dataByTimestamp.has(metric.timestamp)) {
+        dataByTimestamp.set(metric.timestamp, {
+          timestamp: metric.timestamp,
+          time: formatTimestamp(metric.timestamp),
+          date: formatDate(metric.timestamp),
+        });
+      }
+      
+      const dataPoint = dataByTimestamp.get(metric.timestamp)!;
+      
+      // Store CPU and RAM for this pod
+      dataPoint[`${metric.pod_name}_cpu`] = metric.cpu_percent;
+      dataPoint[`${metric.pod_name}_ram`] = metric.ram_percent;
+    }
+
+    return Array.from(dataByTimestamp.values());
+  })();
+
+  // Get pod index for color assignment
+  const getPodIndex = (podName: string): number => {
+    const pod = availablePods.find(p => p.name === podName);
+    if (pod) {
+      return availablePods.indexOf(pod);
+    }
+    return uniquePods.indexOf(podName);
+  };
+
+  const getPodColor = (podName: string): string => {
+    const index = getPodIndex(podName);
+    return POD_COLORS[index % POD_COLORS.length];
+  };
+
+  // Calculate stats for selected pods or all pods
+  const stats = (() => {
+    const targetPods = displayPods;
+    if (targetPods.length === 0 || chartData.length === 0) {
+      return { avgCpu: 0, avgRam: 0, maxCpu: 0, maxRam: 0 };
+    }
+
+    let totalCpu = 0;
+    let totalRam = 0;
+    let maxCpu = 0;
+    let maxRam = 0;
+    let cpuCount = 0;
+    let ramCount = 0;
+
+    for (const data of chartData) {
+      for (const podName of targetPods) {
+        const cpu = data[`${podName}_cpu`] as number;
+        const ram = data[`${podName}_ram`] as number;
+        
+        if (cpu !== undefined) {
+          totalCpu += cpu;
+          cpuCount++;
+          if (cpu > maxCpu) maxCpu = cpu;
+        }
+        if (ram !== undefined) {
+          totalRam += ram;
+          ramCount++;
+          if (ram > maxRam) maxRam = ram;
+        }
+      }
+    }
+
+    return {
+      avgCpu: cpuCount > 0 ? totalCpu / cpuCount : 0,
+      avgRam: ramCount > 0 ? totalRam / ramCount : 0,
+      maxCpu,
+      maxRam,
+    };
+  })();
+
+  // Generate lines for each pod (CPU and RAM)
+  const renderLines = () => {
+    const lines: JSX.Element[] = [];
+
+    for (const podName of displayPods) {
+      const isHighlighted = highlightedPod === podName;
+      const color = getPodColor(podName);
+      const strokeWidth = isHighlighted ? 3 : 1;
+      const opacity = highlightedPod && !isHighlighted ? 0.3 : 1;
+
+      // CPU line
+      lines.push(
+        <Line
+          key={`${podName}-cpu`}
+          type="monotone"
+          dataKey={`${podName}_cpu`}
+          name={`${podName} (CPU)`}
+          stroke={color}
+          strokeWidth={strokeWidth}
+          dot={false}
+          activeDot={{ r: isHighlighted ? 6 : 4, stroke: color, strokeWidth: 2, fill: '#fff' }}
+          opacity={opacity}
+          connectNulls
+        />
+      );
+
+      // RAM line (use same color but dashed)
+      lines.push(
+        <Line
+          key={`${podName}-ram`}
+          type="monotone"
+          dataKey={`${podName}_ram`}
+          name={`${podName} (RAM)`}
+          stroke={color}
+          strokeWidth={strokeWidth}
+          strokeDasharray="5 5"
+          dot={false}
+          activeDot={{ r: isHighlighted ? 6 : 4, stroke: color, strokeWidth: 2, fill: '#fff' }}
+          opacity={opacity}
+          connectNulls
+        />
+      );
+    }
+
+    return lines;
+  };
+
+  // If no metrics, show empty state message
+  if (metrics.length === 0) {
+    return (
+      <div className="text-center py-8 text-gray-500">
+        No timeline data available
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -103,39 +240,42 @@ export default function TimelineChart({ data }: TimelineChartProps) {
       <div className="grid grid-cols-4 gap-4">
         <div className="bg-primary-50 rounded-lg p-3">
           <p className="text-xs text-primary-600 font-medium">Avg CPU</p>
-          <p className="text-xl font-bold text-primary-700">{avgCpu}%</p>
+          <p className="text-xl font-bold text-primary-700">{stats.avgCpu.toFixed(1)}%</p>
         </div>
         <div className="bg-purple-50 rounded-lg p-3">
           <p className="text-xs text-purple-600 font-medium">Avg RAM</p>
-          <p className="text-xl font-bold text-purple-700">{avgRam} MB</p>
+          <p className="text-xl font-bold text-purple-700">{stats.avgRam.toFixed(1)}%</p>
         </div>
         <div className="bg-red-50 rounded-lg p-3">
           <p className="text-xs text-red-600 font-medium">Max CPU</p>
-          <p className="text-xl font-bold text-red-700">{maxCpu}%</p>
+          <p className="text-xl font-bold text-red-700">{stats.maxCpu.toFixed(1)}%</p>
         </div>
         <div className="bg-amber-50 rounded-lg p-3">
           <p className="text-xs text-amber-600 font-medium">Max RAM</p>
-          <p className="text-xl font-bold text-amber-700">{maxRam} MB</p>
+          <p className="text-xl font-bold text-amber-700">{stats.maxRam.toFixed(1)}%</p>
         </div>
       </div>
 
+      {/* Legend info */}
+      <div className="text-sm text-gray-500 flex items-center gap-4">
+        <span>Showing {displayPods.length} pod{displayPods.length !== 1 ? 's' : ''}</span>
+        {highlightedPod && (
+          <span className="text-primary-600 font-medium">
+            Highlighted: {highlightedPod}
+          </span>
+        )}
+        <span className="text-xs">
+          Solid = CPU | Dashed = RAM
+        </span>
+      </div>
+
       {/* Chart */}
-      <div className="h-72">
+      <div className="h-80">
         <ResponsiveContainer width="100%" height="100%">
-          <AreaChart 
+          <LineChart 
             data={chartData} 
             margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
           >
-            <defs>
-              <linearGradient id="cpuGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#2563eb" stopOpacity={0.3}/>
-                <stop offset="95%" stopColor="#2563eb" stopOpacity={0}/>
-              </linearGradient>
-              <linearGradient id="ramGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3}/>
-                <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0}/>
-              </linearGradient>
-            </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
             <XAxis
               dataKey="time"
@@ -146,20 +286,10 @@ export default function TimelineChart({ data }: TimelineChartProps) {
               minTickGap={60}
             />
             <YAxis
-              yAxisId="cpu"
               tick={{ fontSize: 11, fill: '#6b7280' }}
               tickLine={{ stroke: '#e5e7eb' }}
               axisLine={{ stroke: '#e5e7eb' }}
               tickFormatter={(value) => `${value}%`}
-              domain={[0, 'auto']}
-            />
-            <YAxis
-              yAxisId="ram"
-              orientation="right"
-              tick={{ fontSize: 11, fill: '#6b7280' }}
-              tickLine={{ stroke: '#e5e7eb' }}
-              axisLine={{ stroke: '#e5e7eb' }}
-              tickFormatter={(value) => `${value}`}
               domain={[0, 'auto']}
             />
             <Tooltip content={<CustomTooltip />} />
@@ -170,33 +300,12 @@ export default function TimelineChart({ data }: TimelineChartProps) {
               iconSize={8}
               formatter={(value) => (
                 <span className="text-sm font-medium text-gray-700">
-                  {value === 'cpu' ? 'CPU (%)' : 'RAM (MB)'}
+                  {value}
                 </span>
               )}
             />
-            <Area
-              yAxisId="cpu"
-              type="monotone"
-              dataKey="cpu"
-              stroke="#2563eb"
-              strokeWidth={2}
-              fill="url(#cpuGradient)"
-              dot={false}
-              activeDot={{ r: 5, stroke: '#2563eb', strokeWidth: 2, fill: '#fff' }}
-              name="cpu"
-            />
-            <Area
-              yAxisId="ram"
-              type="monotone"
-              dataKey="ram"
-              stroke="#8b5cf6"
-              strokeWidth={2}
-              fill="url(#ramGradient)"
-              dot={false}
-              activeDot={{ r: 5, stroke: '#8b5cf6', strokeWidth: 2, fill: '#fff' }}
-              name="ram"
-            />
-          </AreaChart>
+            {renderLines()}
+          </LineChart>
         </ResponsiveContainer>
       </div>
     </div>

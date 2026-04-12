@@ -7,24 +7,31 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/trace-point/trace-point/internal/config"
+	"github.com/trace-point/trace-point/internal/integration/prometheus"
 	"github.com/trace-point/trace-point/internal/storage"
+	"github.com/trace-point/trace-point/internal/utils/logger"
 )
 
 // Handler holds all handlers for the server
 type Handler struct {
-	repo *storage.Repository
+	repo             *storage.Repository
+	prometheusClient *prometheus.Client
+	appConfig        *config.Config
 }
 
 // NewHandler creates a new handler instance
-func NewHandler(repo *storage.Repository) *Handler {
+func NewHandler(repo *storage.Repository, prometheusClient *prometheus.Client, appConfig *config.Config) *Handler {
 	return &Handler{
-		repo: repo,
+		repo:             repo,
+		prometheusClient: prometheusClient,
+		appConfig:        appConfig,
 	}
 }
 
 // RegisterRoutes registers all API routes
-func RegisterRoutesWithRepo(r chi.Router, repo *storage.Repository) {
-	h := NewHandler(repo)
+func RegisterRoutesWithRepo(r chi.Router, repo *storage.Repository, prometheusClient *prometheus.Client, appConfig *config.Config) {
+	h := NewHandler(repo, prometheusClient, appConfig)
 
 	// Export handler routes
 	r.Get("/export", h.handleExportSpikes)
@@ -46,7 +53,12 @@ func RegisterRoutesWithRepo(r chi.Router, repo *storage.Repository) {
 
 // handleSpikes returns a list of spike events
 func (h *Handler) handleSpikes(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
 	ctx := r.Context()
+
+	// Log request start
+	logger.Debug("[API] handleSpikes START | Method=%s | Path=%s | Query=%s",
+		r.Method, r.URL.Path, r.URL.RawQuery)
 
 	// Parse query params
 	limit := 100
@@ -54,15 +66,21 @@ func (h *Handler) handleSpikes(w http.ResponseWriter, r *http.Request) {
 	namespace := r.URL.Query().Get("namespace")
 	podFilter := r.URL.Query().Get("pod")
 
+	logger.Debug("[API] handleSpikes | limit=%d | offset=%d | namespace=%s | podFilter=%s",
+		limit, offset, namespace, podFilter)
+
 	// Get time range
 	endTime := time.Now()
-	startTime := endTime.AddDate(0, 0, -7) // Default 7 days
+	startTimeArg := endTime.AddDate(0, 0, -7) // Default 7 days
 
-	events, err := h.repo.ListSpikeEvents(ctx, limit, offset, namespace, podFilter, startTime, endTime)
+	events, err := h.repo.ListSpikeEvents(ctx, limit, offset, namespace, podFilter, startTimeArg, endTime)
 	if err != nil {
+		logger.Error("[API] handleSpikes ERROR | err=%v | duration=%v", err, time.Since(startTime))
 		http.Error(w, fmt.Sprintf("Failed to fetch spike events: %v", err), http.StatusInternalServerError)
 		return
 	}
+
+	logger.Debug("[API] handleSpikes SUCCESS | events_count=%d | duration=%v", len(events), time.Since(startTime))
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(events)
@@ -70,19 +88,28 @@ func (h *Handler) handleSpikes(w http.ResponseWriter, r *http.Request) {
 
 // handleSpikeByID returns a single spike event by ID
 func (h *Handler) handleSpikeByID(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
 	ctx := r.Context()
 
 	id := chi.URLParam(r, "id")
+
+	logger.Debug("[API] handleSpikeByID START | Method=%s | Path=%s | id=%s",
+		r.Method, r.URL.Path, id)
+
 	event, err := h.repo.GetSpikeEvent(ctx, id)
 	if err != nil {
+		logger.Error("[API] handleSpikeByID ERROR | id=%s | err=%v | duration=%v", id, err, time.Since(startTime))
 		http.Error(w, fmt.Sprintf("Failed to fetch spike event: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	if event == nil {
+		logger.Debug("[API] handleSpikeByID NOT_FOUND | id=%s | duration=%v", id, time.Since(startTime))
 		http.Error(w, "Spike event not found", http.StatusNotFound)
 		return
 	}
+
+	logger.Debug("[API] handleSpikeByID SUCCESS | id=%s | duration=%v", id, time.Since(startTime))
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(event)
@@ -90,42 +117,151 @@ func (h *Handler) handleSpikeByID(w http.ResponseWriter, r *http.Request) {
 
 // handleTimeline returns timeline data for visualization
 func (h *Handler) handleTimeline(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
 	ctx := r.Context()
 
-	// Parse time range from query params or use defaults
+	logger.Debug("[API] handleTimeline START | Method=%s | Path=%s | Query=%s",
+		r.Method, r.URL.Path, r.URL.RawQuery)
+
+	// Parse query params
 	now := time.Now()
-	startTime := now.AddDate(0, 0, -1) // Last 24 hours
 
-	events, err := h.repo.ListSpikeEvents(ctx, 500, 0, "", "", startTime, now)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to fetch timeline data: %v", err), http.StatusInternalServerError)
-		return
+	// Parse time range from query param (default: 24h)
+	timeRange := r.URL.Query().Get("time_range")
+	startTimeArg := now.AddDate(0, 0, -1) // Default 24 hours
+	switch timeRange {
+	case "1h":
+		startTimeArg = now.Add(-1 * time.Hour)
+	case "6h":
+		startTimeArg = now.Add(-6 * time.Hour)
+	case "24h":
+		startTimeArg = now.AddDate(0, 0, -1)
+	case "7d":
+		startTimeArg = now.AddDate(-7, 0, 0)
+	default:
+		// Default to 24h
+		startTimeArg = now.AddDate(0, 0, -1)
 	}
 
-	// Transform to timeline format
-	timeline := struct {
-		GeneratedAt string               `json:"generated_at"`
-		StartDate   string               `json:"start_date"`
-		EndDate     string               `json:"end_date"`
-		DataPoints  []storage.SpikeEvent `json:"data_points"`
-	}{
-		GeneratedAt: now.Format(time.RFC3339),
-		StartDate:   startTime.Format(time.RFC3339),
-		EndDate:     now.Format(time.RFC3339),
-		DataPoints:  events,
+	// Parse step parameter (default: 30s)
+	stepStr := r.URL.Query().Get("step")
+	step := 30 * time.Second
+	if stepStr != "" {
+		// Parse duration string (e.g., "30s", "1m", "5m")
+		if parsed, err := time.ParseDuration(stepStr); err == nil {
+			step = parsed
+		}
 	}
+
+	// Parse source parameter (default: "all")
+	source := r.URL.Query().Get("source")
+	if source == "" {
+		source = "all"
+	}
+
+	// NEW: Parse pod_name filter (comma-separated)
+	podNameFilter := r.URL.Query().Get("pod_name")
+
+	logger.Debug("[API] handleTimeline | timeRange=%s | step=%s | source=%s | pod_name=%s | startTime=%s | endTime=%s",
+		timeRange, step, source, podNameFilter, startTimeArg.Format(time.RFC3339), now.Format(time.RFC3339))
+
+	// Initialize response
+	response := TimelineResponse{
+		GeneratedAt:   now.Format(time.RFC3339),
+		StartDate:     startTimeArg.Format(time.RFC3339),
+		EndDate:       now.Format(time.RFC3339),
+		Metrics:       []prometheus.TimelineMetric{},
+		SpikeMarkers:  []storage.SpikeMarker{},
+		AvailablePods: []prometheus.AvailablePod{},
+	}
+
+	// Query Prometheus for continuous metrics if source is "prometheus" or "all"
+	if (source == "prometheus" || source == "all") && h.prometheusClient != nil {
+		namespaces := h.appConfig.Namespaces
+		if len(namespaces) == 0 {
+			namespaces = []string{} // Empty means all namespaces
+		}
+
+		// Pass podNameFilter to query function
+		metrics, err := h.prometheusClient.QueryTimelineMetrics(ctx, namespaces, startTimeArg, now, step, podNameFilter)
+		if err != nil {
+			logger.Error("Failed to query Prometheus timeline metrics: %v", err)
+			// Graceful degradation - return empty metrics
+			response.Metrics = []prometheus.TimelineMetric{}
+		} else {
+			response.Metrics = metrics
+		}
+
+		// Fetch available pods for dropdown (only if not filtering to specific pod)
+		if podNameFilter == "" {
+			availablePods, err := h.prometheusClient.GetAvailablePods(ctx, namespaces)
+			if err != nil {
+				logger.Error("Failed to fetch available pods: %v", err)
+			} else {
+				response.AvailablePods = availablePods
+			}
+		}
+	}
+
+	// Query SQLite for spike markers if source is "spikes" or "all"
+	if source == "spikes" || source == "all" {
+		events, err := h.repo.ListSpikeEvents(ctx, 500, 0, "", "", startTimeArg, now)
+		if err != nil {
+			logger.Error("Failed to fetch spike events for timeline: %v", err)
+			// Graceful degradation - return empty markers
+			response.SpikeMarkers = []storage.SpikeMarker{}
+		} else {
+			// Convert spike events to spike markers
+			for _, event := range events {
+				marker := storage.SpikeMarker{
+					Timestamp: event.Timestamp,
+					PodName:   event.PodName,
+					Namespace: event.Namespace,
+					CPUSpike:  event.CPUUsagePercent > 0,
+					RAMSpike:  event.RAMUsagePercent > 0,
+					RouteName: "",
+					TraceID:   "",
+				}
+				if event.RouteName != nil {
+					marker.RouteName = *event.RouteName
+				}
+				if event.TraceID != nil {
+					marker.TraceID = *event.TraceID
+				}
+				response.SpikeMarkers = append(response.SpikeMarkers, marker)
+			}
+		}
+	}
+
+	logger.Debug("[API] handleTimeline SUCCESS | metrics_count=%d | spike_markers_count=%d | duration=%v",
+		len(response.Metrics), len(response.SpikeMarkers), time.Since(startTime))
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(timeline)
+	json.NewEncoder(w).Encode(response)
+}
+
+// TimelineResponse represents the timeline API response format
+type TimelineResponse struct {
+	GeneratedAt   string                      `json:"generated_at"`
+	StartDate     string                      `json:"start_date"`
+	EndDate       string                      `json:"end_date"`
+	Metrics       []prometheus.TimelineMetric `json:"metrics"`
+	SpikeMarkers  []storage.SpikeMarker       `json:"spike_markers"`
+	AvailablePods []prometheus.AvailablePod   `json:"availablePods"`
 }
 
 // handleConfig returns current configuration (stub - returns defaults)
 func (h *Handler) handleConfig(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
 	ctx := r.Context()
+
+	logger.Debug("[API] handleConfig START | Method=%s | Path=%s",
+		r.Method, r.URL.Path)
 
 	// Return stub config for now
 	configs, err := h.repo.ListSpikeEvents(ctx, 10, 0, "", "", time.Time{}, time.Now())
 	if err != nil {
+		logger.Debug("[API] handleConfig SUCCESS | using_default | duration=%v", time.Since(startTime))
 		// Return empty config response
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"config": "default"}`))
@@ -133,19 +269,29 @@ func (h *Handler) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = ctx
+	logger.Debug("[API] handleConfig SUCCESS | events_count=%d | duration=%v", len(configs), time.Since(startTime))
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(configs)
 }
 
 // handleGravityScores returns resource gravity scores
 func (h *Handler) handleGravityScores(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
 	ctx := r.Context()
 
-	endTime := time.Now()
-	startTime := endTime.AddDate(0, 0, -30)
+	logger.Debug("[API] handleGravityScores START | Method=%s | Path=%s",
+		r.Method, r.URL.Path)
 
-	events, err := h.repo.ListSpikeEvents(ctx, 5000, 0, "", "", startTime, endTime)
+	endTime := time.Now()
+	startTimeArg := endTime.AddDate(0, 0, -30)
+
+	logger.Debug("[API] handleGravityScores | startTime=%s | endTime=%s",
+		startTimeArg.Format(time.RFC3339), endTime.Format(time.RFC3339))
+
+	events, err := h.repo.ListSpikeEvents(ctx, 5000, 0, "", "", startTimeArg, endTime)
 	if err != nil {
+		logger.Error("[API] handleGravityScores ERROR | err=%v | duration=%v", err, time.Since(startTime))
 		http.Error(w, fmt.Sprintf("Failed to fetch spike events: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -153,21 +299,31 @@ func (h *Handler) handleGravityScores(w http.ResponseWriter, r *http.Request) {
 	// Calculate gravity scores by service
 	gravityScores := calculateGravityScores(events)
 
+	logger.Debug("[API] handleGravityScores SUCCESS | services_count=%d | duration=%v", len(gravityScores), time.Since(startTime))
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(gravityScores)
 }
 
 // handleExportSpikes exports spike history for the past 7 days
 func (h *Handler) handleExportSpikes(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
 	ctx := r.Context()
+
+	logger.Debug("[API] handleExportSpikes START | Method=%s | Path=%s",
+		r.Method, r.URL.Path)
 
 	// Default to past 7 days
 	endTime := time.Now()
-	startTime := endTime.AddDate(0, 0, -7)
+	startTimeArg := endTime.AddDate(0, 0, -7)
+
+	logger.Debug("[API] handleExportSpikes | startTime=%s | endTime=%s",
+		startTimeArg.Format(time.RFC3339), endTime.Format(time.RFC3339))
 
 	// Query spike events for the past 7 days
-	events, err := h.repo.ListSpikeEvents(ctx, 1000, 0, "", "", startTime, endTime)
+	events, err := h.repo.ListSpikeEvents(ctx, 1000, 0, "", "", startTimeArg, endTime)
 	if err != nil {
+		logger.Error("[API] handleExportSpikes ERROR | err=%v | duration=%v", err, time.Since(startTime))
 		http.Error(w, fmt.Sprintf("Failed to fetch spike events: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -175,7 +331,7 @@ func (h *Handler) handleExportSpikes(w http.ResponseWriter, r *http.Request) {
 	// Create export response
 	export := SpikeExport{
 		GeneratedAt: time.Now().Format(time.RFC3339),
-		StartDate:   startTime.Format(time.RFC3339),
+		StartDate:   startTimeArg.Format(time.RFC3339),
 		EndDate:     endTime.Format(time.RFC3339),
 		TotalEvents: len(events),
 		Events:      events,
@@ -186,22 +342,33 @@ func (h *Handler) handleExportSpikes(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
 
+	logger.Debug("[API] handleExportSpikes SUCCESS | events_count=%d | duration=%v", len(events), time.Since(startTime))
+
 	// Encode and write response
 	if err := json.NewEncoder(w).Encode(export); err != nil {
+		logger.Error("[API] handleExportSpikes ENCODE_ERROR | err=%v | duration=%v", err, time.Since(startTime))
 		http.Error(w, fmt.Sprintf("Failed to encode response: %v", err), http.StatusInternalServerError)
 	}
 }
 
 // handleExportRefactoring exports refactoring recommendations
 func (h *Handler) handleExportRefactoring(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
 	ctx := r.Context()
+
+	logger.Debug("[API] handleExportRefactoring START | Method=%s | Path=%s",
+		r.Method, r.URL.Path)
 
 	// Get all spike events for analysis (longer window for refactoring analysis)
 	endTime := time.Now()
-	startTime := endTime.AddDate(0, 0, -30) // 30 days for better analysis
+	startTimeArg := endTime.AddDate(0, 0, -30) // 30 days for better analysis
 
-	events, err := h.repo.ListSpikeEvents(ctx, 5000, 0, "", "", startTime, endTime)
+	logger.Debug("[API] handleExportRefactoring | startTime=%s | endTime=%s",
+		startTimeArg.Format(time.RFC3339), endTime.Format(time.RFC3339))
+
+	events, err := h.repo.ListSpikeEvents(ctx, 5000, 0, "", "", startTimeArg, endTime)
 	if err != nil {
+		logger.Error("[API] handleExportRefactoring ERROR | err=%v | duration=%v", err, time.Since(startTime))
 		http.Error(w, fmt.Sprintf("Failed to fetch spike events: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -222,8 +389,12 @@ func (h *Handler) handleExportRefactoring(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
 
+	logger.Debug("[API] handleExportRefactoring SUCCESS | events_count=%d | recommendations_count=%d | duration=%v",
+		len(events), len(recommendations), time.Since(startTime))
+
 	// Encode and write response
 	if err := json.NewEncoder(w).Encode(export); err != nil {
+		logger.Error("[API] handleExportRefactoring ENCODE_ERROR | err=%v | duration=%v", err, time.Since(startTime))
 		http.Error(w, fmt.Sprintf("Failed to encode response: %v", err), http.StatusInternalServerError)
 	}
 }

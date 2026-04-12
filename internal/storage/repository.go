@@ -310,6 +310,141 @@ func (r *Repository) PurgeOldSpikes(ctx context.Context, days int) (int64, error
 	return rowsAffected, nil
 }
 
+// SaveTimelineMetrics saves timeline metrics to the cache.
+func (r *Repository) SaveTimelineMetrics(ctx context.Context, metrics []TimelineMetric) error {
+	if len(metrics) == 0 {
+		return nil
+	}
+
+	// Use a transaction for batch insert
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO metrics_cache (
+			pod_name, namespace, cpu_percent, ram_percent, timestamp, created_at
+		) VALUES (?, ?, ?, ?, ?, datetime('now'))
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, m := range metrics {
+		_, err := stmt.ExecContext(ctx, m.PodName, m.Namespace, m.CPUPercent, m.RAMPercent, m.Timestamp.Format(time.RFC3339))
+		if err != nil {
+			return fmt.Errorf("failed to save timeline metric: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// GetTimelineMetrics retrieves timeline metrics from cache within a time range.
+func (r *Repository) GetTimelineMetrics(ctx context.Context, startTime, endTime time.Time, namespace, podFilter string) ([]TimelineMetric, error) {
+	// Build query with filters
+	query := `
+		SELECT
+			id, timestamp, pod_name, namespace, cpu_percent, ram_percent, created_at
+		FROM metrics_cache
+		WHERE 1=1
+	`
+	args := []interface{}{}
+
+	if namespace != "" {
+		query += " AND namespace = ?"
+		args = append(args, namespace)
+	}
+
+	if podFilter != "" {
+		query += " AND pod_name LIKE ?"
+		args = append(args, "%"+podFilter+"%")
+	}
+
+	if !startTime.IsZero() {
+		query += " AND timestamp >= ?"
+		args = append(args, startTime.Format(time.RFC3339))
+	}
+
+	if !endTime.IsZero() {
+		query += " AND timestamp <= ?"
+		args = append(args, endTime.Format(time.RFC3339))
+	}
+
+	// Add ordering
+	query += " ORDER BY timestamp ASC"
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get timeline metrics: %w", err)
+	}
+	defer rows.Close()
+
+	var metrics []TimelineMetric
+	for rows.Next() {
+		var m TimelineMetric
+		var timestampStr, createdAtStr string
+
+		err := rows.Scan(
+			&m.ID,
+			&timestampStr,
+			&m.PodName,
+			&m.Namespace,
+			&m.CPUPercent,
+			&m.RAMPercent,
+			&createdAtStr,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan timeline metric: %w", err)
+		}
+
+		// Parse timestamps
+		m.Timestamp, _ = time.Parse(time.RFC3339, timestampStr)
+		m.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
+
+		metrics = append(metrics, m)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating timeline metrics: %w", err)
+	}
+
+	if metrics == nil {
+		metrics = []TimelineMetric{}
+	}
+
+	return metrics, nil
+}
+
+// PruneOldMetrics removes metrics older than the specified hours.
+func (r *Repository) PruneOldMetrics(ctx context.Context, retentionHours int) (int64, error) {
+	if retentionHours <= 0 {
+		retentionHours = 24 // Default 24 hours
+	}
+
+	result, err := r.db.ExecContext(ctx, `
+		DELETE FROM metrics_cache
+		WHERE created_at < datetime('now', '-' || ? || ' hours')
+	`, retentionHours)
+	if err != nil {
+		return 0, fmt.Errorf("failed to prune old metrics: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	return rowsAffected, nil
+}
+
 // Helper functions
 
 // nullString converts a string pointer to sql.NullString.
