@@ -52,6 +52,40 @@ func ExtractReplicasetName(podName string) string {
 	return podName
 }
 
+// extractValueFromResult extracts a float64 value from a Prometheus result Value field.
+// Handles different formats: []interface{} (instant query), string, float64
+func extractValueFromResult(value interface{}) float64 {
+	if value == nil {
+		return 0
+	}
+
+	// Handle []interface{} format (instant query result: [timestamp, value])
+	if vals, ok := value.([]interface{}); ok && len(vals) >= 2 {
+		switch v := vals[1].(type) {
+		case float64:
+			return v * 100 // Convert to percentage
+		case string:
+			if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+				return parsed * 100
+			}
+		}
+	}
+
+	// Handle direct float64
+	if val, ok := value.(float64); ok {
+		return val * 100
+	}
+
+	// Handle string
+	if val, ok := value.(string); ok {
+		if parsed, err := strconv.ParseFloat(val, 64); err == nil {
+			return parsed * 100
+		}
+	}
+
+	return 0
+}
+
 // Client handles communication with Prometheus
 type Client struct {
 	httpClient *http.Client
@@ -711,12 +745,7 @@ func (c *Client) GetAvailablePods(ctx context.Context, namespaces []string) ([]A
 		replicasetName := ExtractReplicasetName(podName)
 		key := fmt.Sprintf("%s/%s", namespace, replicasetName)
 
-		var cpuPercent float64
-		if vals, ok := r.Value.([]interface{}); ok && len(vals) >= 2 {
-			if val, ok := vals[1].(float64); ok {
-				cpuPercent = val * 100
-			}
-		}
+		cpuPercent := extractValueFromResult(r.Value)
 
 		if m, exists := replicasetMetrics[key]; exists {
 			m.PodCount++
@@ -738,15 +767,18 @@ func (c *Client) GetAvailablePods(ctx context.Context, namespaces []string) ([]A
 		replicasetName := ExtractReplicasetName(podName)
 		key := fmt.Sprintf("%s/%s", namespace, replicasetName)
 
-		var ramPercent float64
-		if vals, ok := r.Value.([]interface{}); ok && len(vals) >= 2 {
-			if val, ok := vals[1].(float64); ok {
-				ramPercent = val * 100
-			}
-		}
+		ramPercent := extractValueFromResult(r.Value)
 
 		if m, exists := replicasetMetrics[key]; exists {
 			m.CurrentRAM += ramPercent
+		} else {
+			// Also create entry if it doesn't exist (for RAM-only pods)
+			replicasetMetrics[key] = &AvailablePod{
+				Name:       replicasetName,
+				Namespace:  namespace,
+				PodCount:   0, // Will be counted in CPU processing
+				CurrentRAM: ramPercent,
+			}
 		}
 	}
 

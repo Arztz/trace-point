@@ -33,8 +33,8 @@ function transformTimelineData(raw: unknown): TimelineData & { metrics?: Timelin
       availablePods = (data.availablePods as AvailablePod[]).map(pod => ({
         name: pod.name,           // Replicaset name
         namespace: pod.namespace,
-        cpu_percent: pod.current_cpu,
-        ram_percent: pod.current_ram,
+        cpu_percent: pod.current_cpu || pod.currentCpu || 0,
+        ram_percent: pod.current_ram || pod.currentRam || 0,
       }));
     } else {
       // Fallback: Extract unique pods from metrics (legacy behavior)
@@ -218,7 +218,7 @@ export default function Dashboard() {
         ? debouncedSelectedPods.join(',') 
         : debouncedPodName;
       const raw = await api.timeline.get({ 
-        timeRange, 
+        timeRange: timeRange,  // Pass the actual timeRange value to trigger new API calls
         namespace: debouncedNamespace, 
         podName: podNameParam 
       });

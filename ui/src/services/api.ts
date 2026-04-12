@@ -43,7 +43,13 @@ export const api = {
     }): Promise<TimelineData> => {
       // The API now returns TimelineResponse with metrics and spike_markers
       // The Dashboard transformer handles the conversion to TimelineData
-      const response = await apiClient.get<TimelineResponse>('/timeline', { params });
+      // Map timeRange to time_range for backend compatibility
+      const apiParams = {
+        time_range: params.timeRange,
+        namespace: params.namespace,
+        pod_name: params.podName,
+      };
+      const response = await apiClient.get<TimelineResponse>('/timeline', { params: apiParams });
       return response.data as unknown as TimelineData;
     },
   },

@@ -71,8 +71,10 @@ func BuildRAMUtilizationQuery(namespaces []string, excludePatterns []string) str
 
 	// Base query: Working set / Memory request as percentage
 	// Using kube_pod_container_resource_requests for memory request instead of container_spec_memory_limit
+	// Note: kube_pod_container_resource_requests is a gauge metric (requested amount at point in time),
+	// NOT a counter, so rate() should NOT be applied to it (unlike container_memory_working_set_bytes which is a gauge but works with rate())
 	query := fmt.Sprintf(
-		`sum(rate(container_memory_working_set_bytes{%s}[5m])) by (pod, namespace, container) / sum(rate(kube_pod_container_resource_requests{%s, resource="memory"}[5m])) by (pod, namespace, container) * 100`,
+		`sum(rate(container_memory_working_set_bytes{%s}[5m])) by (pod, namespace, container) / sum(kube_pod_container_resource_requests{%s, resource="memory"}) by (pod, namespace, container) * 100`,
 		selector, selector,
 	)
 
@@ -92,7 +94,7 @@ func BuildContainerCPUQuery(podName, namespace, containerName string) string {
 func BuildContainerRAMQuery(podName, namespace, containerName string) string {
 	selector := fmt.Sprintf(`pod="%s", namespace="%s", container="%s"`, podName, namespace, containerName)
 	return fmt.Sprintf(
-		`sum(rate(container_memory_working_set_bytes{%s}[5m])) by (pod, namespace, container) / sum(rate(kube_pod_container_resource_requests{%s, resource="memory"}[5m])) by (pod, namespace, container) * 100`,
+		`sum(rate(container_memory_working_set_bytes{%s}[5m])) by (pod, namespace, container) / sum(kube_pod_container_resource_requests{%s, resource="memory"}) by (pod, namespace, container) * 100`,
 		selector, selector,
 	)
 }

@@ -8,7 +8,7 @@ function App() {
       <div className="min-h-screen bg-gray-50">
         {/* Header */}
         <header className="bg-gradient-to-r from-gray-900 to-gray-800 shadow-lg">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="max-w-full mx-4 sm:mx-6 lg:mx-8">
             <div className="flex items-center justify-between h-16">
               {/* Logo & Title */}
               <div className="flex items-center gap-3">
@@ -77,7 +77,7 @@ function App() {
 
         {/* Breadcrumb */}
         <div className="bg-white border-b border-gray-200">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="max-w-full mx-4 sm:mx-6 lg:mx-8">
             <div className="flex items-center gap-2 h-10 text-sm">
               <span className="text-gray-500">Home</span>
               <span className="text-gray-400">/</span>
@@ -87,7 +87,7 @@ function App() {
         </div>
 
         {/* Main Content */}
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <main className="flex-1 flex flex-col max-w-full mx-4 sm:mx-6 lg:mx-8 py-8">
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="*" element={<Navigate to="/" replace />} />
@@ -96,7 +96,7 @@ function App() {
 
         {/* Footer */}
         <footer className="bg-white border-t border-gray-200 mt-auto">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          <div className="max-w-full mx-4 sm:mx-6 lg:mx-8 py-6">
             <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
               <div className="flex items-center gap-2 text-sm text-gray-500">
                 <FiActivity className="w-4 h-4 text-primary-500" />

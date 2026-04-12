@@ -76,8 +76,10 @@ export interface AvailablePod {
   name: string;       // Replicaset name (e.g., "payment-service")
   namespace: string;  // Namespace
   pod_count: number; // Number of pods in this replicaset
-  current_cpu: number;
-  current_ram: number;
+  current_cpu: number;  // snake_case from API
+  current_ram: number;  // snake_case from API
+  currentCpu?: number;   // camelCase fallback
+  currentRam?: number;  // camelCase fallback
 }
 
 // Color palette for different pods (up to 20 unique colors)

@@ -6,7 +6,6 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  Legend,
 } from 'recharts';
 import type { TimelineMetric, PodInfo } from '../types/timeline';
 import { POD_COLORS } from '../types/timeline';
@@ -88,17 +87,19 @@ export default function TimelineChart({
   highlightedPod = null,
   onHighlight,
 }: TimelineChartProps) {
-  // Get unique pods from metrics
-  const uniquePods = Array.from(new Set(metrics.map(m => m.pod_name)));
+  // Get unique replicasets from metrics (group by replicaset_name, not individual pod)
+  const uniqueReplicasets = Array.from(new Set(metrics.map(m => m.replicaset_name)));
   
-  // Determine which pods to display
-  const displayPods = selectedPods.length === 0
-    ? uniquePods
-    : uniquePods.filter(p => selectedPods.includes(p));
+  // Determine which replicasets to display
+  const displayReplicasets = selectedPods.length === 0
+    ? uniqueReplicasets
+    : uniqueReplicasets.filter(r => selectedPods.includes(r));
 
   // Transform metrics into chart data format (one row per timestamp)
+  // Aggregate metrics by replicaset (average across all pods in that replicaset)
   const chartData = (() => {
-    const dataByTimestamp = new Map<string, PodLineData>();
+    // First, group metrics by timestamp and replicaset
+    const dataByTimestampReplica = new Map<string, Map<string, { cpu: number[]; ram: number[] }>>();
     
     // Sort metrics by timestamp
     const sortedMetrics = [...metrics].sort((a, b) => 
@@ -106,42 +107,72 @@ export default function TimelineChart({
     );
 
     for (const metric of sortedMetrics) {
-      if (!dataByTimestamp.has(metric.timestamp)) {
-        dataByTimestamp.set(metric.timestamp, {
-          timestamp: metric.timestamp,
-          time: formatTimestamp(metric.timestamp),
-          date: formatDate(metric.timestamp),
-        });
+      const replicasetName = metric.replicaset_name;
+      
+      if (!dataByTimestampReplica.has(metric.timestamp)) {
+        dataByTimestampReplica.set(metric.timestamp, new Map());
       }
       
-      const dataPoint = dataByTimestamp.get(metric.timestamp)!;
+      const replicaMap = dataByTimestampReplica.get(metric.timestamp)!;
       
-      // Store CPU and RAM for this pod
-      dataPoint[`${metric.pod_name}_cpu`] = metric.cpu_percent;
-      dataPoint[`${metric.pod_name}_ram`] = metric.ram_percent;
+      if (!replicaMap.has(replicasetName)) {
+        replicaMap.set(replicasetName, { cpu: [], ram: [] });
+      }
+      
+      const entry = replicaMap.get(replicasetName)!;
+      entry.cpu.push(metric.cpu_percent);
+      entry.ram.push(metric.ram_percent);
+    }
+
+    // Convert to chart data format with aggregated values
+    const dataByTimestamp = new Map<string, PodLineData>();
+    
+    for (const [timestamp, replicaMap] of dataByTimestampReplica) {
+      const date = new Date(timestamp);
+      
+      dataByTimestamp.set(timestamp, {
+        timestamp,
+        time: formatTimestamp(timestamp),
+        date: formatDate(timestamp),
+      });
+      
+      const dataPoint = dataByTimestamp.get(timestamp)!;
+      
+      // Aggregate metrics for each replicaset (average across pods)
+      for (const [replicasetName, values] of replicaMap) {
+        const avgCpu = values.cpu.length > 0 
+          ? values.cpu.reduce((a, b) => a + b, 0) / values.cpu.length 
+          : 0;
+        const avgRam = values.ram.length > 0 
+          ? values.ram.reduce((a, b) => a + b, 0) / values.ram.length 
+          : 0;
+        
+        dataPoint[`${replicasetName}_cpu`] = avgCpu;
+        dataPoint[`${replicasetName}_ram`] = avgRam;
+      }
     }
 
     return Array.from(dataByTimestamp.values());
   })();
 
-  // Get pod index for color assignment
-  const getPodIndex = (podName: string): number => {
-    const pod = availablePods.find(p => p.name === podName);
+  // Get replicaset index for color assignment
+  const getReplicaIndex = (replicasetName: string): number => {
+    const pod = availablePods.find(p => p.name === replicasetName);
     if (pod) {
       return availablePods.indexOf(pod);
     }
-    return uniquePods.indexOf(podName);
+    return uniqueReplicasets.indexOf(replicasetName);
   };
 
-  const getPodColor = (podName: string): string => {
-    const index = getPodIndex(podName);
+  const getPodColor = (replicasetName: string): string => {
+    const index = getReplicaIndex(replicasetName);
     return POD_COLORS[index % POD_COLORS.length];
   };
 
-  // Calculate stats for selected pods or all pods
+  // Calculate stats for selected replicasets or all replicasets
   const stats = (() => {
-    const targetPods = displayPods;
-    if (targetPods.length === 0 || chartData.length === 0) {
+    const targetReplicasets = displayReplicasets;
+    if (targetReplicasets.length === 0 || chartData.length === 0) {
       return { avgCpu: 0, avgRam: 0, maxCpu: 0, maxRam: 0 };
     }
 
@@ -153,9 +184,9 @@ export default function TimelineChart({
     let ramCount = 0;
 
     for (const data of chartData) {
-      for (const podName of targetPods) {
-        const cpu = data[`${podName}_cpu`] as number;
-        const ram = data[`${podName}_ram`] as number;
+      for (const replicasetName of targetReplicasets) {
+        const cpu = data[`${replicasetName}_cpu`] as number;
+        const ram = data[`${replicasetName}_ram`] as number;
         
         if (cpu !== undefined) {
           totalCpu += cpu;
@@ -178,46 +209,101 @@ export default function TimelineChart({
     };
   })();
 
-  // Generate lines for each pod (CPU and RAM)
+  // Handle line click - toggle highlight behavior - simplified
+  const handleLineClick = (replicasetName: string) => {
+    // Only handle click if onHighlight is provided
+    if (!onHighlight) return;
+    
+    // Toggle behavior: if already highlighted, unhighlight; otherwise highlight
+    if (highlightedPod === replicasetName) {
+      onHighlight(null);
+    } else {
+      onHighlight(replicasetName);
+    }
+  };
+
+  // Handle chart click - detect which data point was clicked
+  const handleChartClick = (event: any, activePayload: any[]) => {
+    // Debug: log the click event
+    console.log('[TimelineChart] onClick:', { event, activePayload });
+    
+    // Only process if there are active payload elements clicked
+    if (!activePayload || activePayload.length === 0 || !onHighlight) {
+      console.log('[TimelineChart] No valid click - missing payload or onHighlight');
+      return;
+    }
+    
+    // Get the first clicked element data
+    const element = activePayload[0];
+    console.log('[TimelineChart] Clicked element:', element);
+    
+    if (element && element.dataKey) {
+      const dataKey = String(element.dataKey);
+      console.log('[TimelineChart] dataKey:', dataKey);
+      
+      // Extract replicaset name from dataKey (e.g., "game-workflow_cpu" -> "game-workflow")
+      const replicasetName = dataKey.replace('_cpu', '').replace('_ram', '');
+      console.log('[TimelineChart] Extracted replicasetName:', replicasetName);
+      
+      handleLineClick(replicasetName);
+    }
+  };
+
+  // Handle individual line click - more reliable than chart-level onClick
+  const handleLineClickEvent = (replicasetName: string) => (event: any) => {
+    console.log('[TimelineChart] Line clicked:', replicasetName, event);
+    handleLineClick(replicasetName);
+  };
+
+  // Generate lines for each replicaset (CPU and RAM)
   const renderLines = () => {
     const lines: JSX.Element[] = [];
 
-    for (const podName of displayPods) {
-      const isHighlighted = highlightedPod === podName;
-      const color = getPodColor(podName);
+    for (const replicasetName of displayReplicasets) {
+      const isHighlighted = highlightedPod === replicasetName;
+      // When a pod is highlighted, hide all other lines completely
+      const isVisible = !highlightedPod || isHighlighted;
+      const color = getPodColor(replicasetName);
       const strokeWidth = isHighlighted ? 3 : 1;
-      const opacity = highlightedPod && !isHighlighted ? 0.3 : 1;
+      const opacity = isVisible ? 1 : 0;
+
+      // Skip rendering hidden lines entirely
+      if (!isVisible) {
+        continue;
+      }
 
       // CPU line
       lines.push(
         <Line
-          key={`${podName}-cpu`}
+          key={`${replicasetName}-cpu`}
           type="monotone"
-          dataKey={`${podName}_cpu`}
-          name={`${podName} (CPU)`}
+          dataKey={`${replicasetName}_cpu`}
+          name={`${replicasetName} (CPU)`}
           stroke={color}
           strokeWidth={strokeWidth}
-          dot={false}
+          dot={isHighlighted}
           activeDot={{ r: isHighlighted ? 6 : 4, stroke: color, strokeWidth: 2, fill: '#fff' }}
           opacity={opacity}
           connectNulls
+          onClick={handleLineClickEvent(replicasetName)}
         />
       );
 
       // RAM line (use same color but dashed)
       lines.push(
         <Line
-          key={`${podName}-ram`}
+          key={`${replicasetName}-ram`}
           type="monotone"
-          dataKey={`${podName}_ram`}
-          name={`${podName} (RAM)`}
+          dataKey={`${replicasetName}_ram`}
+          name={`${replicasetName} (RAM)`}
           stroke={color}
           strokeWidth={strokeWidth}
           strokeDasharray="5 5"
-          dot={false}
+          dot={isHighlighted}
           activeDot={{ r: isHighlighted ? 6 : 4, stroke: color, strokeWidth: 2, fill: '#fff' }}
           opacity={opacity}
           connectNulls
+          onClick={handleLineClickEvent(replicasetName)}
         />
       );
     }
@@ -258,7 +344,7 @@ export default function TimelineChart({
 
       {/* Legend info */}
       <div className="text-sm text-gray-500 flex items-center gap-4">
-        <span>Showing {displayPods.length} pod{displayPods.length !== 1 ? 's' : ''}</span>
+        <span>Showing {displayReplicasets.length} replicaset{displayReplicasets.length !== 1 ? 's' : ''}</span>
         {highlightedPod && (
           <span className="text-primary-600 font-medium">
             Highlighted: {highlightedPod}
@@ -269,12 +355,13 @@ export default function TimelineChart({
         </span>
       </div>
 
-      {/* Chart */}
-      <div className="h-80">
+      {/* Chart - use fixed height for reliability */}
+      <div className="h-[600px] min-w-0">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart 
             data={chartData} 
             margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
+            onClick={handleChartClick}
           >
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
             <XAxis
@@ -293,17 +380,7 @@ export default function TimelineChart({
               domain={[0, 'auto']}
             />
             <Tooltip content={<CustomTooltip />} />
-            <Legend 
-              verticalAlign="top" 
-              height={36}
-              iconType="circle"
-              iconSize={8}
-              formatter={(value) => (
-                <span className="text-sm font-medium text-gray-700">
-                  {value}
-                </span>
-              )}
-            />
+            {/* Legend hidden per user request - removed to declutter chart */}
             {renderLines()}
           </LineChart>
         </ResponsiveContainer>

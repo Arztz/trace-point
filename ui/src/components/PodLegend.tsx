@@ -40,7 +40,7 @@ export default function PodLegend({
   return (
     <div className="space-y-2">
       <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-        Pods ({displayPods.length})
+        Replicasets ({displayPods.length})
       </h4>
       <div className="space-y-1 max-h-64 overflow-y-auto">
         {displayPods.map((pod, index) => {
@@ -85,13 +85,13 @@ export default function PodLegend({
                   title="CPU"
                 >
                   <FiTrendingUp className="w-3 h-3" />
-                  {pod.cpu_percent.toFixed(1)}%
+                  {typeof pod.cpu_percent === 'number' ? pod.cpu_percent.toFixed(1) : '0'}%
                 </span>
                 <span
                   className="flex items-center gap-0.5"
                   title="RAM"
                 >
-                  {pod.ram_percent.toFixed(1)}%
+                  {typeof pod.ram_percent === 'number' ? pod.ram_percent.toFixed(1) : '0'}%
                 </span>
               </div>
 
