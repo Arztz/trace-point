@@ -1,0 +1,214 @@
+import { useState } from 'react';
+import type { SpikeEvent } from '../types';
+import { FiActivity, FiCpu, FiServer, FiChevronRight, FiClock, FiAlertTriangle } from 'react-icons/fi';
+import { TbCpu } from 'react-icons/tb';
+
+interface SpikeListProps {
+  spikes: SpikeEvent[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}
+
+function formatTime(timestamp: string): string {
+  const date = new Date(timestamp);
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function getSpikeSeverity(currentValue: number, movingAverage: number): 'critical' | 'warning' | 'normal' {
+  const ratio = currentValue / movingAverage;
+  if (ratio >= 3) return 'critical';
+  if (ratio >= 2) return 'warning';
+  return 'normal';
+}
+
+function getSeverityColor(severity: string): string {
+  switch (severity) {
+    case 'critical':
+      return 'text-red-600 bg-red-50 border-red-200';
+    case 'warning':
+      return 'text-amber-600 bg-amber-50 border-amber-200';
+    default:
+      return 'text-primary-600 bg-primary-50 border-primary-200';
+  }
+}
+
+function getResourceIcon(resourceType: string) {
+  if (resourceType === 'cpu') {
+    return <TbCpu className="w-4 h-4" />;
+  }
+  return <FiServer className="w-4 h-4" />;
+}
+
+function getResourceColor(resourceType: string): string {
+  if (resourceType === 'cpu') {
+    return 'text-primary-600 bg-primary-100';
+  }
+  return 'text-purple-600 bg-purple-100';
+}
+
+export default function SpikeList({ spikes, selectedId, onSelect }: SpikeListProps) {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  if (spikes.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 text-center">
+        <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4">
+          <FiActivity className="w-8 h-8 text-gray-400" />
+        </div>
+        <p className="text-gray-500 font-medium">No spikes detected</p>
+        <p className="text-gray-400 text-sm mt-1">Spikes will appear here when detected</p>
+      </div>
+    );
+  }
+
+  const handleToggleExpand = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExpandedId(expandedId === id ? null : id);
+  };
+
+  return (
+    <div className="space-y-3 max-h-[500px] overflow-y-auto custom-scrollbar pr-1">
+      {spikes.map((spike) => {
+        const severity = getSpikeSeverity(spike.currentValue, spike.movingAverage);
+        const isExpanded = expandedId === spike.id;
+        const isSelected = selectedId === spike.id;
+        const spikeRatio = ((spike.currentValue / spike.movingAverage) * 100 - 100).toFixed(0);
+
+        return (
+          <div
+            key={spike.id}
+            onClick={() => onSelect(spike.id)}
+            className={`
+              relative overflow-hidden rounded-lg border transition-all duration-200 cursor-pointer
+              ${isSelected 
+                ? 'ring-2 ring-primary-500 border-primary-300 shadow-md' 
+                : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'
+              }
+              ${getSeverityColor(severity)}
+            `}
+          >
+            {/* Severity indicator bar */}
+            <div 
+              className={`
+                absolute left-0 top-0 bottom-0 w-1
+                ${severity === 'critical' ? 'bg-red-500' : severity === 'warning' ? 'bg-amber-500' : 'bg-primary-500'}
+              `}
+            />
+
+            <div className="p-4 pl-5">
+              {/* Header */}
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <span className={`p-1.5 rounded-md ${getResourceColor(spike.resourceType)}`}>
+                    {getResourceIcon(spike.resourceType)}
+                  </span>
+                  <span className="font-semibold text-sm text-gray-900 capitalize">
+                    {spike.resourceType === 'cpu' ? 'CPU' : 'Memory'} Spike
+                  </span>
+                  {severity === 'critical' && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                      <FiAlertTriangle className="w-3 h-3" />
+                      Critical
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={(e) => handleToggleExpand(spike.id, e)}
+                  className="p-1 rounded hover:bg-gray-100 text-gray-400 transition-colors"
+                >
+                  <FiChevronRight 
+                    className={`w-4 h-4 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} 
+                  />
+                </button>
+              </div>
+
+              {/* Pod info */}
+              <div className="flex items-center gap-2 mb-3">
+                <FiServer className="w-3.5 h-3.5 text-gray-400" />
+                <span className="text-sm text-gray-600 truncate font-mono">
+                  {spike.podName}
+                </span>
+              </div>
+
+              {/* Metrics row */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div>
+                    <p className="text-xs text-gray-500">Current</p>
+                    <p className={`text-lg font-bold ${severity === 'critical' ? 'text-red-600' : severity === 'warning' ? 'text-amber-600' : 'text-gray-900'}`}>
+                      {spike.currentValue.toFixed(1)}%
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">Average</p>
+                    <p className="text-sm font-medium text-gray-600">
+                      {spike.movingAverage.toFixed(1)}%
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">Threshold</p>
+                    <p className="text-sm font-medium text-gray-600">
+                      {spike.threshold}%
+                    </p>
+                  </div>
+                </div>
+                
+                <div className="text-right">
+                  <div className="flex items-center gap-1 text-xs text-gray-500">
+                    <FiClock className="w-3 h-3" />
+                    {formatTime(spike.timestamp)}
+                  </div>
+                  <p className="text-xs text-amber-600 font-medium mt-1">
+                    +{spikeRatio}% above avg
+                  </p>
+                </div>
+              </div>
+
+              {/* Expanded content - Root causes */}
+              {isExpanded && spike.possibleRootCauses && spike.possibleRootCauses.length > 0 && (
+                <div className="mt-4 pt-4 border-t border-gray-200 animate-fade-in">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+                    Possible Root Causes
+                  </p>
+                  <div className="space-y-2">
+                    {spike.possibleRootCauses.slice(0, 3).map((cause, idx) => (
+                      <div 
+                        key={idx} 
+                        className="bg-gray-50 rounded-md p-2.5 text-xs"
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="font-mono text-primary-600">{cause.route}</span>
+                          <span className={`
+                            px-1.5 py-0.5 rounded text-xs font-medium
+                            ${cause.confidence >= 0.8 ? 'bg-green-100 text-green-700' : 
+                              cause.confidence >= 0.5 ? 'bg-amber-100 text-amber-700' : 
+                              'bg-gray-100 text-gray-600'}
+                          `}>
+                            {(cause.confidence * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                        <p className="text-gray-600">
+                          <span className="font-medium">Function:</span> {cause.functionName}
+                        </p>
+                        {cause.filePath && (
+                          <p className="text-gray-500 truncate mt-1 font-mono text-xs">
+                            {cause.filePath}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}

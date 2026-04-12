@@ -1,0 +1,39 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Documentation
+*.md
+docs/
+LICENSE
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*_test.go
+*.test
+coverage.out
+
+# Vendor (we use go mod)
+vendor/
+
+# Data directory
+data/
+
+# Trace binary
+trace-point
+
+# Development files
+.env
+.env.local
+*.log
