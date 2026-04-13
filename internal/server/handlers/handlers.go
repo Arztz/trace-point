@@ -323,6 +323,7 @@ func (h *Handler) handleTimeline(w http.ResponseWriter, r *http.Request) {
 		Metrics:       []prometheus.TimelineMetric{},
 		SpikeMarkers:  []storage.SpikeMarker{},
 		AvailablePods: []prometheus.AvailablePod{},
+		Summary:       []TimelineSummary{},
 	}
 
 	// Query Prometheus for continuous metrics if source is "prometheus" or "all"
@@ -352,6 +353,9 @@ func (h *Handler) handleTimeline(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
+	// Build CPU-focused deployment summary (RAM ignored)
+	response.Summary = buildTimelineSummary(response.Metrics, h.appConfig.Timeline)
 
 	// Query SQLite for spike markers if source is "spikes" or "all"
 	if source == "spikes" || source == "all" {
@@ -398,6 +402,85 @@ type TimelineResponse struct {
 	Metrics       []prometheus.TimelineMetric `json:"metrics"`
 	SpikeMarkers  []storage.SpikeMarker       `json:"spike_markers"`
 	AvailablePods []prometheus.AvailablePod   `json:"availablePods"`
+	Summary       []TimelineSummary           `json:"summary"`
+}
+
+// TimelineSummary represents CPU summary stats per deployment
+type TimelineSummary struct {
+	Deployment     string  `json:"deployment"`
+	Namespace      string  `json:"namespace"`
+	AvgCPUPercent  float64 `json:"avg_cpu_percent"`
+	MaxCPUPercent  float64 `json:"max_cpu_percent"`
+	Above100       bool    `json:"above_100"`
+	Classification string  `json:"classification"`
+}
+
+type timelineSummaryAccumulator struct {
+	deployment string
+	namespace  string
+	sumCPU     float64
+	count      int
+	maxCPU     float64
+}
+
+func buildTimelineSummary(metrics []prometheus.TimelineMetric, cfg config.TimelineConfig) []TimelineSummary {
+	if len(metrics) == 0 {
+		return []TimelineSummary{}
+	}
+
+	accumulators := make(map[string]*timelineSummaryAccumulator)
+	for _, metric := range metrics {
+		deployment := metric.PodName
+		key := fmt.Sprintf("%s/%s", metric.Namespace, deployment)
+		acc, exists := accumulators[key]
+		if !exists {
+			acc = &timelineSummaryAccumulator{
+				deployment: deployment,
+				namespace:  metric.Namespace,
+				maxCPU:     metric.CPUPercent,
+			}
+			accumulators[key] = acc
+		}
+
+		acc.sumCPU += metric.CPUPercent
+		acc.count++
+		if metric.CPUPercent > acc.maxCPU {
+			acc.maxCPU = metric.CPUPercent
+		}
+	}
+
+	results := make([]TimelineSummary, 0, len(accumulators))
+	for _, acc := range accumulators {
+		if acc.count == 0 {
+			continue
+		}
+		avgCPU := acc.sumCPU / float64(acc.count)
+		above100 := acc.maxCPU > cfg.CPUOver100Threshold
+		classification := "balanced"
+		if avgCPU >= cfg.CPUCloseTo100Threshold && acc.maxCPU > cfg.CPUOver100Threshold {
+			classification = "needs_more_cpu"
+		} else if avgCPU <= cfg.CPUFarBelow100Threshold && acc.maxCPU <= cfg.CPUOver100Threshold {
+			classification = "overprovisioned"
+		}
+
+		results = append(results, TimelineSummary{
+			Deployment:     acc.deployment,
+			Namespace:      acc.namespace,
+			AvgCPUPercent:  avgCPU,
+			MaxCPUPercent:  acc.maxCPU,
+			Above100:       above100,
+			Classification: classification,
+		})
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Namespace == results[j].Namespace {
+			return results[i].Deployment < results[j].Deployment
+		}
+		return results[i].Namespace < results[j].Namespace
+	})
+
+	return results
 }
 
 // handleConfig returns current configuration (stub - returns defaults)

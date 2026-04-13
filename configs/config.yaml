@@ -41,6 +41,12 @@ detection:
   window_size: 5m        # detection window
   min_samples: 3          # minimum data points
 
+# Timeline summary thresholds (CPU focused)
+timeline:
+  cpu_close_to_100_threshold: 85   # avg CPU >= this and max > 100 => needs_more_cpu
+  cpu_far_below_100_threshold: 50  # avg CPU <= this and max <= 100 => overprovisioned
+  cpu_over_100_threshold: 100      # max CPU threshold used for above_100
+
 # Discord notifications
 discord:
   enabled: true

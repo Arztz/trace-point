@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { FiAlertTriangle, FiTrendingUp, FiArrowUp, FiArrowDown } from 'react-icons/fi';
+import { FiAlertTriangle, FiTrendingUp } from 'react-icons/fi';
 import type { PodInfo } from '../types/timeline';
 import { getPodColor } from '../types/timeline';
 
@@ -11,7 +11,7 @@ interface PodLegendProps {
   showAllPods?: boolean;
 }
 
-type SortField = 'name' | 'cpu' | 'ram';
+type SortField = 'name' | 'cpu';
 type SortOrder = 'asc' | 'desc';
 
 export default function PodLegend({
@@ -38,9 +38,6 @@ export default function PodLegend({
         case 'cpu':
           comparison = (a.cpu_percent || 0) - (b.cpu_percent || 0);
           break;
-        case 'ram':
-          comparison = (a.ram_percent || 0) - (b.ram_percent || 0);
-          break;
       }
       return sortBy.order === 'asc' ? comparison : -comparison;
     });
@@ -65,7 +62,7 @@ export default function PodLegend({
           Replicasets ({displayPods.length})
         </h4>
         <div className="flex gap-1">
-          {(['name', 'cpu', 'ram'] as const).map((field) => (
+          {(['name', 'cpu'] as const).map((field) => (
             <button
               key={field}
               type="button"
@@ -133,12 +130,6 @@ export default function PodLegend({
                 >
                   <FiTrendingUp className="w-3 h-3" />
                   {typeof pod.cpu_percent === 'number' ? pod.cpu_percent.toFixed(1) : '0'}%
-                </span>
-                <span
-                  className="flex items-center gap-0.5"
-                  title="RAM"
-                >
-                  {typeof pod.ram_percent === 'number' ? pod.ram_percent.toFixed(1) : '0'}%
                 </span>
               </div>
 

@@ -14,6 +14,7 @@ type Config struct {
 	Signoz             SignozConfig     `mapstructure:"signoz"`
 	GCloud             GCloudConfig     `mapstructure:"gcloud"`
 	Detection          DetectionConfig  `mapstructure:"detection"`
+	Timeline           TimelineConfig   `mapstructure:"timeline"`
 	Discord            DiscordConfig    `mapstructure:"discord"`
 	Database           DatabaseConfig   `mapstructure:"database"`
 	Namespaces         []string         `mapstructure:"namespaces"`
@@ -65,6 +66,13 @@ type DetectionConfig struct {
 	MinSamples         int           `mapstructure:"min_samples"`
 }
 
+// TimelineConfig holds timeline summary thresholds
+type TimelineConfig struct {
+	CPUCloseTo100Threshold  float64 `mapstructure:"cpu_close_to_100_threshold"`
+	CPUFarBelow100Threshold float64 `mapstructure:"cpu_far_below_100_threshold"`
+	CPUOver100Threshold     float64 `mapstructure:"cpu_over_100_threshold"`
+}
+
 // DiscordConfig holds Discord notification settings
 type DiscordConfig struct {
 	Enabled         bool     `mapstructure:"enabled"`
@@ -114,6 +122,9 @@ func Load(configPath string) (*Config, error) {
 	viper.SetDefault("detection.error_rate_threshold", 5)
 	viper.SetDefault("detection.window_size", "5m")
 	viper.SetDefault("detection.min_samples", 3)
+	viper.SetDefault("timeline.cpu_close_to_100_threshold", 85)
+	viper.SetDefault("timeline.cpu_far_below_100_threshold", 50)
+	viper.SetDefault("timeline.cpu_over_100_threshold", 100)
 	viper.SetDefault("prometheus.timeout", "30s")
 	viper.SetDefault("prometheus.scrape_interval", "15s")
 	viper.SetDefault("prometheus.use_deployment_aggregation", false) // Default to false for backward compatibility

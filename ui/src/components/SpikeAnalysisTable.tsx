@@ -10,7 +10,7 @@ interface SpikeAnalysisTableProps {
 
 // Sort field types
 type SortField = 'timestamp' | 'replicaset_name' | 'type' | 'deviation_percent' | 'severity' | 'cpu_percent' | 'ram_percent' | 'moving_average';
-type SortOrder = 'asc' | 'desc';
+type SortOrder = 'asc' | 'desc' | 'none';
 
 // Sort configurations
 const SORT_OPTIONS: { value: SortField; label: string }[] = [
@@ -92,7 +92,12 @@ export default function SpikeAnalysisTable({ spikes, isLoading }: SpikeAnalysisT
   
   // Sort spikes
   const sortedSpikes = useMemo(() => {
-    return [...spikes].sort((a, b) => {
+    const spikesCopy = spikes.slice();
+    if (sortOrder === 'none') {
+      return spikesCopy;
+    }
+
+    return spikesCopy.sort((a, b) => {
       let comparison = 0;
       
       switch (sortField) {
@@ -132,17 +137,22 @@ export default function SpikeAnalysisTable({ spikes, isLoading }: SpikeAnalysisT
   
   // Handle sort click
   const handleSort = (field: SortField) => {
-    if (sortField === field) {
-      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortField(field);
-      setSortOrder('desc'); // Default to descending for new field
+    if (field === sortField) {
+      setSortOrder((currentOrder) => {
+        if (currentOrder === 'desc') return 'asc';
+        if (currentOrder === 'asc') return 'none';
+        return 'desc';
+      });
+      return;
     }
+
+    setSortField(field);
+    setSortOrder('desc'); // Default to descending for new field
   };
   
   // Get sort icon
   const getSortIcon = (field: SortField) => {
-    if (sortField !== field) return null;
+    if (sortField !== field || sortOrder === 'none') return null;
     return sortOrder === 'asc' 
       ? <FiChevronUp className="w-4 h-4" />
       : <FiChevronDown className="w-4 h-4" />;
@@ -220,9 +230,10 @@ export default function SpikeAnalysisTable({ spikes, isLoading }: SpikeAnalysisT
               {sortedSpikes.map((spike) => {
                 const severityStyles = getSeverityStyles(spike.severity);
                 const typeStyles = getTypeStyles(spike.type);
+                const rowKey = `${spike.id}-${spike.container_name}-${spike.type}`;
                 
                 return (
-                  <tr key={spike.id} className="hover:bg-gray-50 transition-colors">
+                  <tr key={rowKey} className="hover:bg-gray-50 transition-colors">
                     {/* Timestamp */}
                     <td className="px-4 py-3 text-sm text-gray-900 whitespace-nowrap">
                       {formatTimestamp(spike.timestamp)}

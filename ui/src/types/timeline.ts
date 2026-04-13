@@ -44,9 +44,19 @@ export interface TimelineResponse {
   metrics?: TimelineMetric[];
   spike_markers?: SpikeMarker[];
   availablePods?: AvailablePod[]; // Replicaset-level aggregated data
+  summary?: TimelineSummary[];
   // Legacy format support
   data_points?: TimelineDataPoint[];
   events?: TimelineDataPoint[];
+}
+
+export interface TimelineSummary {
+  deployment: string;
+  namespace: string;
+  avg_cpu_percent: number;
+  max_cpu_percent: number;
+  above_100: boolean;
+  classification: 'needs_more_cpu' | 'overprovisioned' | 'balanced';
 }
 
 export interface TimeRange {

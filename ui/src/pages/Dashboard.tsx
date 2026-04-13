@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { FiRefreshCw, FiDownload, FiActivity, FiAlertTriangle, FiTrendingUp, FiServer, FiCalendar, FiSearch } from 'react-icons/fi';
-import { TIME_RANGES, TimelineData, TimelineMetric, SpikeListResponse, PodInfo, AvailablePod } from '../types';
+import { TIME_RANGES, TimelineData, TimelineMetric, SpikeListResponse, PodInfo, AvailablePod, TimelineSummary } from '../types';
 import { api } from '../services/api';
 import TimelineChart from '../components/TimelineChart';
 import SpikeList from '../components/SpikeList';
@@ -16,7 +16,7 @@ import { EmptyState, ErrorState } from '../components/States';
 
 // Transform raw API response to TimelineData format
 // Handles both new format (prometheus metrics + spike_markers) and legacy format (data_points/events)
-function transformTimelineData(raw: unknown): TimelineData & { metrics?: TimelineMetric[]; availablePods?: PodInfo[] } {
+function transformTimelineData(raw: unknown): TimelineData & { metrics?: TimelineMetric[]; availablePods?: PodInfo[]; summary?: TimelineSummary[] } {
   // If it's already in the correct format, return it
   if (raw && typeof raw === 'object' && 'dataPoints' in raw && Array.isArray((raw as Record<string, unknown>).dataPoints)) {
     return raw as TimelineData & { metrics?: TimelineMetric[]; availablePods?: PodInfo[] };
@@ -93,6 +93,7 @@ function transformTimelineData(raw: unknown): TimelineData & { metrics?: Timelin
       endTime: String(data.end_date || data.endDate || ''),
       metrics,
       availablePods,
+      summary: Array.isArray(data.summary) ? (data.summary as TimelineSummary[]) : undefined,
     };
   }
   
@@ -371,11 +372,11 @@ export default function Dashboard() {
                     <FiActivity className="w-5 h-5 text-primary-600" />
                   </div>
                   <div>
-                    <h2 className="text-lg font-semibold text-gray-900">Resource Timeline</h2>
+                    <h2 className="text-lg font-semibold text-gray-900">CPU Timeline</h2>
                     <p className="text-sm text-gray-500">
                       {timeRange === '1h' ? 'Last hour' : 
                        timeRange === '6h' ? 'Last 6 hours' : 
-                       timeRange === '24h' ? 'Last 24 hours' : 'Last 7 days'} overview
+                       timeRange === '24h' ? 'Last 24 hours' : 'Last 7 days'} CPU utilization
                     </p>
                   </div>
                 </div>
@@ -411,6 +412,7 @@ export default function Dashboard() {
                     availablePods={availablePods}
                     selectedPods={selectedPods}
                     highlightedPod={highlightedPod}
+                    summary={timelineData?.summary}
                     onHighlight={setHighlightedPod}
                   />
                 ) : (
