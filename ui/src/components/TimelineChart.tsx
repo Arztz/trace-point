@@ -1,3 +1,4 @@
+import { useMemo, useCallback } from 'react';
 import {
   LineChart,
   Line,
@@ -8,7 +9,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import type { TimelineMetric, PodInfo } from '../types/timeline';
-import { POD_COLORS } from '../types/timeline';
+import { getPodColor } from '../types/timeline';
 
 interface PodLineData {
   timestamp: string;
@@ -118,13 +119,16 @@ export default function TimelineChart({
   const uniqueReplicasets = Array.from(new Set(metrics.map(m => m.replicaset_name)));
   
   // Determine which replicasets to display
-  const displayReplicasets = selectedPods.length === 0
-    ? uniqueReplicasets
-    : uniqueReplicasets.filter(r => selectedPods.includes(r));
+  const displayReplicasets = useMemo(() => 
+    selectedPods.length === 0
+      ? uniqueReplicasets
+      : uniqueReplicasets.filter(r => selectedPods.includes(r)),
+    [uniqueReplicasets, selectedPods]
+  );
 
-// Transform metrics into chart data format (one row per timestamp)
-// Aggregate metrics by replicaset (average across all pods in that replicaset)
-const chartData = (() => {
+  // Transform metrics into chart data format (one row per timestamp)
+  // Aggregate metrics by replicaset (average across all pods in that replicaset)
+  const chartData = useMemo(() => {
   // Group metrics by timestamp and replicaset
   const dataMap = new Map<string, Map<string, { cpu: number[]; ram: number[] }>>();
   
@@ -178,7 +182,7 @@ const chartData = (() => {
   }
   
   return result;
-})();
+}, [metrics]);
 
   // Get replicaset index for color assignment
   const getReplicaIndex = (replicasetName: string): number => {
@@ -189,13 +193,13 @@ const chartData = (() => {
     return uniqueReplicasets.indexOf(replicasetName);
   };
 
-  const getPodColor = (replicasetName: string): string => {
-    const index = getReplicaIndex(replicasetName);
-    return POD_COLORS[index % POD_COLORS.length];
+  // Use consistent color based on pod name hash (always use hash, ignore index to prevent order-based colors)
+  const getPodColorForReplica = (replicasetName: string): string => {
+    return getPodColor(replicasetName); // No index - always use hash for consistent color
   };
 
   // Calculate stats for selected replicasets or all replicasets
-  const stats = (() => {
+  const stats = useMemo(() => {
     const targetReplicasets = displayReplicasets;
     if (targetReplicasets.length === 0 || chartData.length === 0) {
       return { avgCpu: 0, avgRam: 0, maxCpu: 0, maxRam: 0 };
@@ -232,10 +236,10 @@ const chartData = (() => {
       maxCpu,
       maxRam,
     };
-  })();
+  }, [chartData, displayReplicasets]);
 
   // Handle line click - toggle highlight behavior - simplified
-  const handleLineClick = (replicasetName: string) => {
+  const handleLineClick = useCallback((replicasetName: string) => {
     // Only handle click if onHighlight is provided
     if (!onHighlight) return;
     
@@ -245,40 +249,34 @@ const chartData = (() => {
     } else {
       onHighlight(replicasetName);
     }
-  };
+  }, [highlightedPod, onHighlight]);
 
   // Handle chart click - detect which data point was clicked
-  const handleChartClick = (event: any, activePayload: any[]) => {
-    // Debug: log the click event
-    console.log('[TimelineChart] onClick:', { event, activePayload });
-    
+  const handleChartClick = useCallback((event: unknown, activePayload: unknown[]) => {
     // Only process if there are active payload elements clicked
     if (!activePayload || activePayload.length === 0 || !onHighlight) {
-      console.log('[TimelineChart] No valid click - missing payload or onHighlight');
       return;
     }
     
     // Get the first clicked element data
-    const element = activePayload[0];
-    console.log('[TimelineChart] Clicked element:', element);
+    const element = activePayload[0] as { dataKey?: unknown } | undefined;
     
     if (element && element.dataKey) {
       const dataKey = String(element.dataKey);
-      console.log('[TimelineChart] dataKey:', dataKey);
       
       // Extract replicaset name from dataKey (e.g., "game-workflow_cpu" -> "game-workflow")
       const replicasetName = dataKey.replace('_cpu', '').replace('_ram', '');
-      console.log('[TimelineChart] Extracted replicasetName:', replicasetName);
       
       handleLineClick(replicasetName);
     }
-  };
+  }, [onHighlight]);
 
   // Handle individual line click - more reliable than chart-level onClick
-  const handleLineClickEvent = (replicasetName: string) => (event: any) => {
-    console.log('[TimelineChart] Line clicked:', replicasetName, event);
-    handleLineClick(replicasetName);
-  };
+  const handleLineClickEvent = useCallback((replicasetName: string) => {
+    return () => {
+      handleLineClick(replicasetName);
+    };
+  }, [handleLineClick]);
 
   // Generate lines for each replicaset (CPU and RAM)
   const renderLines = () => {
@@ -288,7 +286,7 @@ const chartData = (() => {
       const isHighlighted = highlightedPod === replicasetName;
       // When a pod is highlighted, hide all other lines completely
       const isVisible = !highlightedPod || isHighlighted;
-      const color = getPodColor(replicasetName);
+      const color = getPodColorForReplica(replicasetName);
       const strokeWidth = isHighlighted ? 3 : 1;
       const opacity = isVisible ? 1 : 0;
 

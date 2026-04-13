@@ -65,11 +65,12 @@ type DetectionConfig struct {
 
 // DiscordConfig holds Discord notification settings
 type DiscordConfig struct {
-	Enabled     bool     `mapstructure:"enabled"`
-	WebhookURL  string   `mapstructure:"webhook_url"`
-	MentionUser string   `mapstructure:"mention_user"`
-	MentionRole string   `mapstructure:"mention_role"`
-	Alerts      []string `mapstructure:"alerts"`
+	Enabled        bool     `mapstructure:"enabled"`
+	WebhookURL     string   `mapstructure:"webhook_url"`
+	MentionUser    string   `mapstructure:"mention_user"`
+	MentionRole    string   `mapstructure:"mention_role"`
+	Alerts         []string `mapstructure:"alerts"`
+	CooldownMinutes int     `mapstructure:"cooldown_minutes"`
 }
 
 // DatabaseConfig holds database settings

@@ -199,20 +199,21 @@ export default function SpikeList({ spikes, selectedId, onSelect }: SpikeListPro
   };
 
   return (
-    <div>
+    <div className="px-4">
       {/* Sort controls header */}
-      <div className="flex items-center justify-between mb-3 px-1">
+      <div className="flex items-center justify-between mb-3 pt-2">
         <span className="text-xs text-gray-500 font-medium">
           {transformedSpikes.length} spike{transformedSpikes.length !== 1 ? 's' : ''}
         </span>
-        <div className="relative">
+        <div className="relative flex items-center gap-1">
+          <span className="text-xs text-gray-400">Sort:</span>
           <select
             value={`${sortBy.value}-${sortBy.direction}`}
             onChange={(e) => {
               const [value, direction] = e.target.value.split('-') as [SortField, SortOrder];
               setSortBy({ value, label: '', direction });
             }}
-            className="text-xs pl-2 pr-6 py-1 appearance-none bg-gray-50 border border-gray-200 rounded-md text-gray-600 cursor-pointer hover:bg-gray-100 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            className="text-xs pl-2 pr-6 py-1 appearance-none bg-white border border-gray-300 rounded-md text-gray-700 cursor-pointer hover:bg-gray-50 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 shadow-sm font-medium"
           >
             {SORT_OPTIONS.map((option) => (
               <option key={`${option.value}-${option.direction}`} value={`${option.value}-${option.direction}`}>
@@ -220,7 +221,7 @@ export default function SpikeList({ spikes, selectedId, onSelect }: SpikeListPro
               </option>
             ))}
           </select>
-          <FiChevronRight className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400 pointer-events-none rotate-90" />
+          <FiChevronRight className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-500 pointer-events-none rotate-90" />
         </div>
       </div>
 

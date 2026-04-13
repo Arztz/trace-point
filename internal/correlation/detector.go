@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,6 +34,10 @@ func DefaultDetectorConfig() *DetectorConfig {
 		CooldownMinutes:             15,
 	}
 }
+
+// maxHistorySize defines the maximum number of metric data points to retain per container
+// This prevents unbounded memory growth: 120 samples = 1 hour at 30-second intervals
+const maxHistorySize = 120
 
 // SpikeDetector detects resource spikes using moving average algorithm
 type SpikeDetector struct {
@@ -108,6 +113,11 @@ func (d *SpikeDetector) UpdateMetrics(ctx context.Context, client *prometheus.Cl
 			}
 		}
 		d.metricsHistory[key] = prunedHistory
+
+		// Enforce max history size to prevent unbounded memory growth
+		if len(d.metricsHistory[key]) > maxHistorySize {
+			d.metricsHistory[key] = d.metricsHistory[key][len(d.metricsHistory[key])-maxHistorySize:]
+		}
 	}
 
 	// Check if baseline learning period is complete
@@ -175,11 +185,15 @@ func (d *SpikeDetector) DetectSpikes(ctx context.Context, client *prometheus.Cli
 				}
 
 				// Spike confirmed, create alert
-				parts := parseKey(key)
+				namespace, podName, containerName, err := parseKey(key)
+				if err != nil {
+					d.logger.Error("Failed to parse key %s: %v", key, err)
+					continue
+				}
 				alert := SpikeAlert{
-					Namespace:        parts.namespace,
-					PodName:          parts.podName,
-					ContainerName:    parts.containerName,
+					Namespace:        namespace,
+					PodName:          podName,
+					ContainerName:    containerName,
 					CPUPercent:       latest.CPUPercent,
 					RAMPercent:       latest.RAMPercent,
 					MovingAverageCPU: avgCPU,
@@ -213,11 +227,15 @@ func (d *SpikeDetector) DetectSpikes(ctx context.Context, client *prometheus.Cli
 				}
 
 				// Spike confirmed, create alert
-				parts := parseKey(key)
+				namespace, podName, containerName, err := parseKey(key)
+				if err != nil {
+					d.logger.Error("Failed to parse key %s: %v", key, err)
+					continue
+				}
 				alert := SpikeAlert{
-					Namespace:        parts.namespace,
-					PodName:          parts.podName,
-					ContainerName:    parts.containerName,
+					Namespace:        namespace,
+					PodName:          podName,
+					ContainerName:    containerName,
 					CPUPercent:       latest.CPUPercent,
 					RAMPercent:       latest.RAMPercent,
 					MovingAverageCPU: avgCPU,
@@ -257,18 +275,13 @@ func calculateMovingAverage(data []MetricDataPoint) (float64, float64) {
 }
 
 // parseKey parses a key back into namespace, podName, containerName
-func parseKey(key string) struct {
-	namespace     string
-	podName       string
-	containerName string
-} {
-	var parts struct {
-		namespace     string
-		podName       string
-		containerName string
+// Returns an error if the key format is invalid
+func parseKey(key string) (namespace, podName, containerName string, err error) {
+	parts := strings.Split(key, "/")
+	if len(parts) != 3 {
+		return "", "", "", fmt.Errorf("invalid key format: expected 3 parts, got %d", len(parts))
 	}
-	fmt.Sscanf(key, "%s/%s/%s", &parts.namespace, &parts.podName, &parts.containerName)
-	return parts
+	return parts[0], parts[1], parts[2], nil
 }
 
 // ResetCooldowns resets all cooldowns (useful for testing)

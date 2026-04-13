@@ -4,19 +4,379 @@
   <img src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go" alt="Go Version">
   <img src="https://img.shields.io/badge/React-18+-61DAFB?style=flat&logo=react" alt="React Version">
   <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License">
-  <img src="https://img.shields.io/badge/Status-Active-success.svg" alt="Status">
+  <img src="https://img.shields.io/badge/Version-1.0.2-success.svg" alt="Version">
 </p>
 
 Trace-Point is an automated tool designed to correlate Kubernetes resource spikes with code-level root causes. It integrates data from Prometheus (metrics), Signoz (traces), and Google Cloud Profiler (samples) to provide complete root cause analysis through a web dashboard and Discord alerts.
 
-## Key Features
+---
 
-- **Automatic Spike Detection**: Detects resource spikes using moving average algorithm with configurable thresholds
-- **Trace Correlation**: Links resource spikes to active API routes via Signoz/Clickhouse trace data
-- **Profiler Enrichment**: Identifies specific culprit functions using Google Cloud Profiler samples
-- **Real-time Alerts**: Sends Discord webhooks with complete RCA information (Route, Impact, Culprit)
-- **Resource Gravity Scores**: Calculates scores to identify services requiring architectural refactoring
-- **JSON Export**: Exports spike history and refactoring recommendations for documentation and planning
+## Table of Contents
+
+1. [Quick Start](#quick-start)
+2. [How to Use the Dashboard](#how-to-use-the-dashboard)
+3. [How to Read Results](#how-to-read-results)
+4. [Calculation Formulas](#calculation-formulas)
+5. [API Reference](#api-reference)
+6. [Configuration](#configuration)
+
+---
+
+## Quick Start
+
+### 1. Run the Application
+
+**Backend (Terminal 1):**
+```bash
+go run cmd/server/main.go
+```
+
+**Frontend (Terminal 2):**
+```bash
+cd ui && npm run dev
+```
+
+### 2. Access the Dashboard
+
+| Service | URL | Description |
+|---------|-----|-------------|
+| Frontend | http://localhost:3000 | Dashboard UI |
+| Backend API | http://localhost:8081 | REST API |
+| Health | http://localhost:8081/health | Health check |
+
+---
+
+## How to Use the Dashboard
+
+### Dashboard Overview
+
+The dashboard displays a unified timeline of CPU and RAM utilization for your Kubernetes pods:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Trace-Point Dashboard                                    [Refresh] [Export]│
+├─────────────────────────────────────────────────────────────────────────────┤
+│  Time Range: [1h] [6h] [24h] [7d]    Namespace: [All ▼]    Pod: [Search...] │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  █                                                                            │
+│  █  CPU ════════════════════════════════════════════════════════════════    │
+│  █     ══════════════════════════════════════════════════════════════      │
+│  █                                                                          │
+│  █  ███                                                                       │
+│  █  ███ RAM ████████████████████████████████████████████████████████████    │
+│  █  ███    ████████████████████████████████████████████████████████████    │
+│  █                                                                          │
+│  █  ● ● ● ● ● ● ● ● ● ● ● ● ● ● ● ● ● ● ● ● ● ● ● ● ● ● ● ● ●             │
+│     ───────────────────────────────────────────────────────────────→ Time   │
+│                                                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  Spike Events                          Sort: [Time ▼]  [CPU ▼] [Pod ▼]     │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │ 🔴 pod-name-abc   production   CPU: 85%   10 min ago   [View Details] │  │
+│  │ 🔴 pod-name-xyz   staging      RAM: 78%   25 min ago   [View Details] │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Using Filters
+
+1. **Time Range Selection**: Choose between 1 hour, 6 hours, 24 hours, or 7 days
+2. **Namespace Filter**: Select specific namespaces to monitor (e.g., production, staging)
+3. **Pod Filter**: Search for specific pods by name
+4. **Replicaset View**: Click on legend items to highlight specific services
+
+### Spike List
+
+- Shows all detected resource spikes
+- Sort by time, CPU usage, RAM usage, or pod name
+- Click "View Details" to see:
+  - Route that was active during the spike
+  - Trace ID for correlation
+  - Culprit function from profiler
+  - Resource impact (before/after)
+
+### Export Data
+
+Click the **Export** button to download:
+- Spike history as JSON (last 7 days)
+- Refactoring recommendations with Resource Gravity Scores
+
+---
+
+## How to Read Results
+
+### Timeline Chart
+
+The timeline chart shows CPU (line) and RAM (area) utilization over time:
+
+| Element | Meaning |
+|---------|---------|
+| **Solid Line** | CPU utilization % |
+| **Dashed Line** | RAM utilization % |
+| **Colored Areas** | Different pods/replicasets |
+| **Red Markers** | Detected spikes |
+| **Tooltip** | Shows current value, baseline, and % vs baseline |
+
+### Understanding the Tooltip
+
+When you hover over a data point, the tooltip shows:
+
+```
+timestamp: 2026-04-13 14:30:00
+cpu: 75% (vs Baseline 50%) ▲
+ram: 60% (vs Baseline 40%) ▲
+```
+
+- **Green (▼)** = Below baseline
+- **Yellow (±)** = Near baseline (within 20%)
+- **Red (▲)** = Above baseline (spike detected)
+
+### Spike Events
+
+Each spike event shows:
+
+| Field | Description |
+|-------|-------------|
+| **Pod Name** | The Kubernetes pod that spiked |
+| **Namespace** | Which namespace it's in |
+| **CPU/RAM %** | Current utilization |
+| **Time Ago** | When the spike occurred |
+| **Route** | API route active during spike |
+| **Trace ID** | Signoz trace for correlation |
+| **Culprit Function** | Code function from profiler |
+
+### Resource Gravity Scores
+
+The Gravity Score identifies services that may need architectural refactoring:
+
+| Score | Meaning | Action |
+|-------|---------|--------|
+| **0-3** | Low impact | Monitor periodically |
+| **3-6** | Medium impact | Consider optimization |
+| **6-10** | High impact | **Priority refactoring** |
+
+Routes tagged with `[Suspected Job]` match patterns like `/tasks/*`, `/batch/*`, `/jobs/*` - these are candidates for extraction to separate microservices.
+
+---
+
+## Calculation Formulas
+
+### 1. Spike Detection Formula
+
+```
+Spike Detected = Current Usage > Moving Average + (Threshold %)
+```
+
+**Example:**
+- Moving Average: 50%
+- Threshold: 50%
+- Spike Trigger: > 75% (50% + 50%)
+
+### 2. Moving Average Calculation
+
+```
+Moving Average = Σ(resource_usage) / N
+
+Where:
+- N = number of samples in the window (default: 60 samples = 30 minutes at 30s intervals)
+- Window = configurable (default: 30 minutes)
+```
+
+### 3. Resource Gravity Score
+
+```
+Resource Gravity Score = Resource Peak × (1 / Request Frequency)
+
+Where:
+- Resource Peak = max(CPU peak %, RAM peak %) over analysis period
+- Request Frequency = total requests / analysis period (7 days)
+
+High Score = High Resource Usage + Low Call Frequency
+```
+
+**Example:**
+- Endpoint `/v1/batch-process`: CPU peak 95%, called 5 times/day
+- Score = 95 × (1/5) = 19 (very high - needs refactoring)
+
+### 4. Route Selection (Culprit Detection)
+
+When multiple routes are active during a spike:
+
+```
+Culprit Route = Route with Highest CPU + RAM consumption
+```
+
+Priority: CPU usage (primary) → RAM usage (secondary)
+
+### 5. Baseline Comparison
+
+```
+vs Baseline % = ((Current - Baseline) / Baseline) × 100
+
+Where:
+- Baseline = Moving Average (30-minute window)
+- Current = Latest sample
+```
+
+### 6. Cooldown Management
+
+```
+Next Alert Allowed = Last Alert Time + Cooldown Duration
+
+Default: 15 minutes cooldown between alerts for the same pod
+```
+
+### 7. Reconciliation Buffer
+
+```
+Alert Sent = Spike Detection Time + Reconciliation Buffer
+
+Default: 8-minute buffer to allow profiler data to become available
+```
+
+---
+
+## API Reference
+
+### Timeline API
+
+```
+GET /api/v1/timeline?range=24h&namespace=production&pod=api
+```
+
+**Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `range` | string | Time range: 1h, 6h, 24h, 7d |
+| `namespace` | string | Filter by namespace |
+| `pod_name` | string | Filter by pod name (supports partial match) |
+
+**Response:**
+```json
+{
+  "metrics": [
+    {
+      "timestamp": "2026-04-13T14:30:00Z",
+      "pod_name": "api-service-abc123",
+      "replicaset_name": "api-service",
+      "namespace": "production",
+      "cpu_percent": 75.0,
+      "ram_percent": 60.0,
+      "baseline": 50.0
+    }
+  ],
+  "availablePods": [
+    {
+      "name": "api-service",
+      "namespace": "production",
+      "cpuPercent": 65,
+      "ramPercent": 45
+    }
+  ]
+}
+```
+
+### Spikes API
+
+```
+GET /api/v1/spikes?limit=50&sort=timestamp&direction=desc
+```
+
+**Response:**
+```json
+{
+  "spikes": [
+    {
+      "id": "uuid",
+      "timestamp": "2026-04-13T14:30:00Z",
+      "pod_name": "api-service-abc123",
+      "namespace": "production",
+      "cpu_usage_percent": 85.0,
+      "ram_usage_percent": 72.0,
+      "route_name": "/v1/process",
+      "trace_id": "abc123-xyz",
+      "culprit_function": "processBatch",
+      "alert_sent": true
+    }
+  ],
+  "total": 150
+}
+```
+
+### Gravity Scores API
+
+```
+GET /api/v1/gravity-scores
+```
+
+**Response:**
+```json
+{
+  "scores": [
+    {
+      "service": "api-service",
+      "resourceGravityScore": 8.5,
+      "cpuPeak": 95.0,
+      "ramPeak": 78.0,
+      "requestCount": 15000,
+      "isJobRoute": false
+    },
+    {
+      "service": "batch-worker",
+      "resourceGravityScore": 19.0,
+      "cpuPeak": 98.0,
+      "ramPeak": 85.0,
+      "requestCount": 5,
+      "isJobRoute": true,
+      "suggestedSeparation": "Extract to separate microservice"
+    }
+  ]
+}
+```
+
+### Export API
+
+```
+GET /api/v1/export?type=spikes&start=2026-04-01&end=2026-04-13
+GET /api/v1/export?type=refactoring
+```
+
+---
+
+## Configuration
+
+### Detection Settings
+
+Edit `configs/config.yaml`:
+
+```yaml
+detection:
+  threshold_percent: 50          # Spike detection threshold (default: 50%)
+  polling_interval_seconds: 30   # How often to poll Prometheus
+  moving_average_window_minutes: 30  # Baseline calculation window
+  baseline_learning_period_minutes: 30  # Initial learning period
+  reconciliation_buffer_minutes: 8  # Wait for profiler data
+  cooldown_minutes: 15           # Alert cooldown
+```
+
+### Discord Alerts
+
+```yaml
+discord:
+  enabled: true
+  webhook_url: "https://discord.com/api/webhooks/..."
+```
+
+### Namespace Filtering
+
+```yaml
+namespaces:
+  - "production"
+  - "staging"
+```
+
+---
 
 ## Architecture
 
@@ -48,282 +408,14 @@ Trace-Point is an automated tool designed to correlate Kubernetes resource spike
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Technology Stack
-
-| Component | Technology | Version |
-|-----------|------------|---------|
-| Backend | Go | 1.25.0 |
-| HTTP Router | Chi | v5.0.10 |
-| Database | SQLite (modernc.org/sqlite) | 3.x |
-| Frontend | React | 18.x |
-| Build Tool | Vite | 5.x |
-| Charts | Recharts | 2.10.x |
-| State Management | TanStack Query | 5.x |
-| Styling | Tailwind CSS | 3.3.x |
-| Configuration | Viper | 1.18.x |
-
-## Prerequisites
-
-- **Go** 1.21 or higher
-- **Node.js** 18 or higher
-- **npm** or **yarn**
-- Access to a Kubernetes cluster with:
-  - Prometheus (metrics)
-  - Signoz (distributed tracing)
-  - Google Cloud Profiler (optional, for profiler enrichment)
-
-## Quick Start
-
-### 1. Clone and Install Dependencies
-
-```bash
-# Clone the repository
-cd trace-point
-
-# Install Go dependencies
-go mod download
-
-# Install frontend dependencies
-cd ui && npm install && cd ..
-```
-
-### 2. Configure the Application
-
-Edit `configs/config.yaml` to match your environment:
-
-```yaml
-app:
-  host: "0.0.0.0"
-  port: 8081
-  mode: "debug"
-
-prometheus:
-  url: "http://localhost:9090"
-
-signoz:
-  url: "http://localhost:3301"
-
-gcloud:
-  project_id: "your-gcp-project-id"
-  region: "us-central1"
-
-detection:
-  cpu_threshold: 80
-  memory_threshold: 85
-  window_size: 5m
-  min_samples: 3
-
-discord:
-  enabled: false
-  webhook_url: ""
-
-database:
-  path: "./data/trace-point.db"
-
-namespaces:
-  - "production"
-  - "staging"
-```
-
-### 3. Run the Application
-
-**Backend (Terminal 1):**
-```bash
-go run cmd/server/main.go
-```
-
-**Frontend (Terminal 2):**
-```bash
-cd ui && npm run dev
-```
-
-### 4. Access the Dashboard
-
-| Service | URL | Description |
-|---------|-----|-------------|
-| Frontend | http://localhost:3000 | Dashboard UI |
-| Backend API | http://localhost:8081 | REST API |
-| Health | http://localhost:8081/health | Health check |
-
-## Configuration Reference
-
-### Detection Settings
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `cpu_threshold` | 80% | CPU spike detection threshold |
-| `memory_threshold` | 85% | Memory spike detection threshold |
-| `window_size` | 5m | Detection window size |
-| `min_samples` | 3 | Minimum data points required |
-
-### Database Settings
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `database.path` | ./data/trace-point.db | SQLite database file path |
-| `database.max_connections` | 25 | Maximum concurrent connections |
-| `database.idle_connections` | 10 | Idle connection pool size |
-
-### Namespace Filtering
-
-Configure which Kubernetes namespaces to monitor:
-```yaml
-namespaces:
-  - "production"
-  - "staging"
-```
-
-Exclude specific pods using regex patterns:
-```yaml
-pod_exclude_patterns:
-  - "^kube-"
-  - "^system-"
-```
-
-## API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/api/v1/spikes` | GET | List spike events (supports `namespace`, `pod` query params) |
-| `/api/v1/spikes/{id}` | GET | Get spike event by ID |
-| `/api/v1/timeline` | GET | Get timeline data for visualization |
-| `/api/v1/export` | GET | Export spike history as JSON |
-| `/api/v1/export/refactoring` | GET | Export refactoring recommendations |
-| `/api/v1/config` | GET | Get current configuration |
-| `/api/v1/gravity-scores` | GET | Get resource gravity scores |
-
-### Example API Calls
-
-```bash
-# Get spike events
-curl http://localhost:8081/api/v1/spikes
-
-# Get spike events for specific namespace
-curl "http://localhost:8081/api/v1/spikes?namespace=production"
-
-# Get timeline data
-curl http://localhost:8081/api/v1/timeline
-
-# Get resource gravity scores
-curl http://localhost:8081/api/v1/gravity-scores
-```
-
-## Spike Detection Algorithm
-
-```
-1. Poll Prometheus every N seconds (default: 30)
-2. Calculate moving average for each pod over 30-minute window
-3. Compare current usage to moving average + threshold%
-4. If spike detected:
-   a. Log spike event to SQLite
-   b. Start reconciliation timer (8 minutes)
-   c. Set cooldown end time (15 minutes)
-5. After reconciliation buffer:
-   a. Query Signoz for trace data
-   b. Fetch Gcloud Profiler samples
-   c. Correlate to identify culprit
-   d. Send Discord alert
-6. Apply cooldown before next spike for same pod
-```
-
-## Resource Gravity Score
-
-The Resource Gravity Score identifies APIs with high resource usage but low call frequency:
-
-```
-High Score = (High Resource Peak) × (Low Call Frequency)
-
-Where:
-- High Resource Peak = max(CPU peak, RAM peak) over analysis period
-- Low Call Frequency = inverse of request count
-```
-
-Routes matching patterns (`/tasks/*`, `/batch/*`, `/jobs/*`) are tagged as `[Suspected Job]`.
-
-## Discord Alert Format
-
-When a spike is detected and the reconciliation buffer has passed, a Discord alert is sent:
-
-```json
-{
-  "embeds": [{
-    "title": "[CRITICAL] Resource Spike Detected - pod-name",
-    "color": "16711680",
-    "fields": [
-      {"name": "Route", "value": "/v1/summarize", "inline": true},
-      {"name": "CPU Impact", "value": "+45% (from 30% to 75%)", "inline": true},
-      {"name": "RAM Impact", "value": "+20% (from 40% to 60%)", "inline": true},
-      {"name": "Culprit Function", "value": "processBatch() in workers/processor.go"},
-      {"name": "Timestamp", "value": "2026-04-11T14:30:00Z"},
-      {"name": "Trace ID", "value": "abc123-xyz789"}
-    ]
-  }]
-}
-```
-
-## Project Structure
-
-```
-trace-point/
-├── cmd/
-│   └── server/
-│       └── main.go              # Application entry point
-├── internal/
-│   ├── config/
-│   │   └── config.go            # Configuration loading
-│   ├── correlation/
-│   │   ├── detector.go          # Spike detection
-│   │   ├── engine.go            # Correlation logic
-│   │   └── router.go            # Route identification
-│   ├── integration/
-│   │   ├── prometheus/          # Prometheus client
-│   │   ├── signoz/              # Signoz client
-│   │   ├── profiler/            # Gcloud Profiler client
-│   │   └── discord/             # Discord webhook client
-│   ├── storage/
-│   │   ├── database.go          # SQLite connection
-│   │   ├── repository.go        # Data access layer
-│   │   └── models.go            # Data models
-│   └── server/
-│       └── handlers/            # HTTP handlers
-├── ui/
-│   ├── src/
-│   │   ├── components/          # Reusable components
-│   │   ├── pages/               # Page components
-│   │   ├── services/            # API services
-│   │   └── types/               # TypeScript types
-│   ├── package.json
-│   ├── vite.config.ts
-│   └── tailwind.config.js
-├── configs/
-│   └── config.yaml              # Configuration
-├── data/
-│   └── trace-point.db           # SQLite database (auto-created)
-└── README.md
-```
-
-## Running Tests
-
-```bash
-# Run Go tests
-go test ./...
-
-# Run a specific test
-go test -v ./internal/correlation/
-
-# Run frontend tests
-cd ui && npm test
-```
+---
 
 ## Known Issues
 
-- **Port Mismatch**: The frontend proxy in `vite.config.ts` targets `http://localhost:8080`, but the default backend port is `8081`. If you see 502 errors, update the proxy target in `vite.config.ts` to match your backend port in `config.yaml`.
+- **Port Mismatch**: Frontend proxy in `vite.config.ts` targets port 8080, but backend defaults to 8081. Update vite.config.ts or config.yaml to match.
+
+---
 
 ## License
 
 MIT License - See LICENSE file for details
-
-## Contributing
-
-Contributions are welcome! Please read the contributing guidelines before submitting PRs.

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -460,14 +461,10 @@ func calculateGravityScores(events []storage.SpikeEvent) []serviceGravity {
 		})
 	}
 
-	// Sort by gravity score
-	for i := 0; i < len(scores)-1; i++ {
-		for j := i + 1; j < len(scores); j++ {
-			if scores[j].ResourceGravityScore > scores[i].ResourceGravityScore {
-				scores[i], scores[j] = scores[j], scores[i]
-			}
-		}
-	}
+	// Sort by gravity score using efficient sort.Slice (O(n log n))
+	sort.Slice(scores, func(i, j int) bool {
+		return scores[i].ResourceGravityScore > scores[j].ResourceGravityScore
+	})
 
 	return scores
 }
@@ -555,14 +552,10 @@ func analyzeRefactoring(events []storage.SpikeEvent) []RefactoringRecommendation
 		})
 	}
 
-	// Sort by gravity score descending
-	for i := 0; i < len(recommendations)-1; i++ {
-		for j := i + 1; j < len(recommendations); j++ {
-			if recommendations[j].ResourceGravityScore > recommendations[i].ResourceGravityScore {
-				recommendations[i], recommendations[j] = recommendations[j], recommendations[i]
-			}
-		}
-	}
+	// Sort by gravity score descending using efficient sort.Slice (O(n log n))
+	sort.Slice(recommendations, func(i, j int) bool {
+		return recommendations[i].ResourceGravityScore > recommendations[j].ResourceGravityScore
+	})
 
 	return recommendations
 }

@@ -1,13 +1,16 @@
-import { useState, useRef, useEffect } from 'react';
-import { FiChevronDown, FiCheck, FiX, FiSearch } from 'react-icons/fi';
+import { useState, useRef, useEffect, useMemo } from 'react';
+import { FiChevronDown, FiCheck, FiX, FiSearch, FiArrowUp, FiArrowDown } from 'react-icons/fi';
 import type { PodInfo } from '../types/timeline';
-import { POD_COLORS } from '../types/timeline';
+import { getPodColor } from '../types/timeline';
 
 interface PodSelectorProps {
   pods: PodInfo[];
   selectedPods: string[];
   onSelectedPodsChange: (pods: string[]) => void;
 }
+
+type SortField = 'name' | 'cpu' | 'ram';
+type SortOrder = 'asc' | 'desc';
 
 export default function PodSelector({
   pods,
@@ -16,6 +19,7 @@ export default function PodSelector({
 }: PodSelectorProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState<{ field: SortField; order: SortOrder }>({ field: 'name', order: 'asc' });
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown when clicking outside
@@ -30,12 +34,34 @@ export default function PodSelector({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const filteredPods = search
-    ? pods.filter((pod) =>
-        pod.name.toLowerCase().includes(search.toLowerCase()) ||
-        pod.namespace.toLowerCase().includes(search.toLowerCase())
-      )
-    : pods;
+  // Filter and sort pods
+  const filteredPods = useMemo(() => {
+    let result = search
+      ? pods.filter((pod) =>
+          pod.name.toLowerCase().includes(search.toLowerCase()) ||
+          pod.namespace.toLowerCase().includes(search.toLowerCase())
+        )
+      : pods;
+
+    // Sort pods
+    result = [...result].sort((a, b) => {
+      let comparison = 0;
+      switch (sortBy.field) {
+        case 'name':
+          comparison = a.name.localeCompare(b.name);
+          break;
+        case 'cpu':
+          comparison = (a.cpu_percent || 0) - (b.cpu_percent || 0);
+          break;
+        case 'ram':
+          comparison = (a.ram_percent || 0) - (b.ram_percent || 0);
+          break;
+      }
+      return sortBy.order === 'asc' ? comparison : -comparison;
+    });
+
+    return result;
+  }, [pods, search, sortBy]);
 
   const handleTogglePod = (podName: string) => {
     if (selectedPods.includes(podName)) {
@@ -51,10 +77,6 @@ export default function PodSelector({
 
   const handleDeselectAll = () => {
     onSelectedPodsChange([]);
-  };
-
-  const getPodColor = (index: number): string => {
-    return POD_COLORS[index % POD_COLORS.length];
   };
 
   const displayText = selectedPods.length === 0
@@ -106,6 +128,33 @@ export default function PodSelector({
             </div>
           </div>
 
+          {/* Sort Controls */}
+          <div className="px-2 py-1.5 border-b border-gray-100 flex items-center gap-2">
+            <span className="text-xs text-gray-400">Sort:</span>
+            <div className="flex gap-1">
+              {(['name', 'cpu', 'ram'] as const).map((field) => (
+                <button
+                  key={field}
+                  type="button"
+                  onClick={() => setSortBy((prev) => ({
+                    field,
+                    order: prev.field === field && prev.order === 'asc' ? 'desc' : 'asc',
+                  }))}
+                  className={`px-2 py-0.5 text-xs rounded transition-colors ${
+                    sortBy.field === field
+                      ? 'bg-primary-100 text-primary-700 font-medium'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  {field === 'name' ? 'Name' : field.toUpperCase()}
+                  {sortBy.field === field && (
+                    sortBy.order === 'asc' ? <FiArrowUp className="inline w-2 h-2 ml-0.5" /> : <FiArrowDown className="inline w-2 h-2 ml-0.5" />
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Select All / Deselect All */}
           <div className="p-2 border-b border-gray-100 flex gap-2">
             <button
@@ -127,9 +176,9 @@ export default function PodSelector({
 
           {/* Pod List */}
           <div className="flex-1 overflow-y-auto max-h-48">
-            {filteredPods.map((pod, index) => {
+            {filteredPods.map((pod) => {
               const isSelected = selectedPods.includes(pod.name);
-              const color = getPodColor(index);
+              const color = getPodColor(pod.name); // No index - always use hash for consistent color
 
               return (
                 <button

@@ -176,9 +176,11 @@ func (c *Client) Query(ctx context.Context, query string, queryTime time.Time) (
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute query: %w", err)
 	}
+	// Ensure body is closed after all checks
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		// Body will still be closed by defer
 		return nil, fmt.Errorf("Prometheus returned status %d", resp.StatusCode)
 	}
 
@@ -216,9 +218,11 @@ func (c *Client) QueryRange(ctx context.Context, query string, start, end time.T
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute range query: %w", err)
 	}
+	// Ensure body is closed after all checks
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		// Body will still be closed by defer
 		return nil, fmt.Errorf("Prometheus returned status %d", resp.StatusCode)
 	}
 

@@ -39,10 +39,11 @@ detection:
 
 # Discord notifications
 discord:
-  enabled: false
-  webhook_url: ""
+  enabled: true
+  webhook_url: "https://discord.com/api/webhooks/1489190429139271720/GOWQh5o3lqPZUA50FNj5hLEhLQdSkI14gMqGFrl9oc4sAy9nvz3nUqNwOW8G7gLt4_xo"
   mention_user: ""      # user ID to mention
   mention_role: ""      # role ID to mention
+  cooldown_minutes: 5   # cooldown period between alerts for same pod
   alerts:
     - critical
     - warning

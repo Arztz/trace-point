@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -107,12 +108,16 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Store discord client in global for alerting (optional enhancement)
-	_ = discordClient
-
 	if !connected {
 		logger.Warn("Prometheus not available - skipping spike detection polling")
 	} else {
+		// Initialize Discord cooldown tracker with thread-safe sync.Map
+		var discordCooldowns sync.Map
+
+		// Initialize context for graceful shutdown of polling loop
+		pollingCtx, cancelPolling := context.WithCancel(context.Background())
+		defer cancelPolling()
+
 		// Initialize spike detector with config values
 		detectorConfig := correlation.DefaultDetectorConfig()
 
@@ -142,7 +147,7 @@ func main() {
 			logger.Info("Starting Prometheus metrics polling every %d seconds...", detectorConfig.PollingIntervalSeconds)
 
 			// Initial poll
-			detectorCtx, detectorCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			detectorCtx, detectorCancel := context.WithTimeout(pollingCtx, 30*time.Second)
 			spikes, err := detector.DetectSpikes(detectorCtx, prometheusClient, cfg.Namespaces, nil)
 			if err != nil {
 				logger.Error("Initial spike detection error: %v", err)
@@ -164,8 +169,11 @@ func main() {
 
 			for {
 				select {
+				case <-pollingCtx.Done():
+					logger.Info("Polling loop shutting down...")
+					return
 				case <-ticker.C:
-					detectorCtx, detectorCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					detectorCtx, detectorCancel := context.WithTimeout(pollingCtx, 30*time.Second)
 					spikes, err := detector.DetectSpikes(detectorCtx, prometheusClient, cfg.Namespaces, nil)
 					if err != nil {
 						logger.Error("Spike detection error: %v", err)
@@ -182,6 +190,41 @@ func main() {
 							// Log detected spikes for debugging
 							logger.Debug("Spike alert: namespace=%s pod=%s cpu=%.1f%% ram=%.1f%% threshold=%.0f%%",
 								spike.Namespace, spike.PodName, spike.CPUPercent, spike.RAMPercent, spike.ThresholdPercent)
+
+							// Check cooldown before sending Discord alert
+							spikeKey := fmt.Sprintf("%s/%s", spike.Namespace, spike.PodName)
+							cooldownDuration := 5 * time.Minute
+							if cfg.Discord.CooldownMinutes > 0 {
+								cooldownDuration = time.Duration(cfg.Discord.CooldownMinutes) * time.Minute
+							}
+							// Thread-safe check and update using sync.Map
+							if lastAlert, ok := discordCooldowns.Load(spikeKey); ok {
+								if time.Since(lastAlert.(time.Time)) < cooldownDuration {
+									logger.Debug("Skipping Discord alert for %s (cooldown active)", spikeKey)
+								} else {
+									// Send Discord alert
+									if discordClient != nil {
+										storageModel := spike.ToStorageModel()
+										if err := discordClient.SendSpikeAlert(context.Background(), storageModel); err != nil {
+											logger.Error("Failed to send Discord alert: %v", err)
+										} else {
+											discordCooldowns.Store(spikeKey, time.Now())
+											logger.Info("Discord alert sent for %s", spikeKey)
+										}
+									}
+								}
+							} else {
+								// No previous alert, send Discord alert
+								if discordClient != nil {
+									storageModel := spike.ToStorageModel()
+									if err := discordClient.SendSpikeAlert(context.Background(), storageModel); err != nil {
+										logger.Error("Failed to send Discord alert: %v", err)
+									} else {
+										discordCooldowns.Store(spikeKey, time.Now())
+										logger.Info("Discord alert sent for %s", spikeKey)
+									}
+								}
+							}
 
 							// Save spike to database
 							storageModel := spike.ToStorageModel()

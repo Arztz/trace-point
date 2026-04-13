@@ -1,6 +1,7 @@
-import { FiAlertTriangle, FiTrendingUp } from 'react-icons/fi';
+import { useState, useMemo } from 'react';
+import { FiAlertTriangle, FiTrendingUp, FiArrowUp, FiArrowDown } from 'react-icons/fi';
 import type { PodInfo } from '../types/timeline';
-import { POD_COLORS } from '../types/timeline';
+import { getPodColor } from '../types/timeline';
 
 interface PodLegendProps {
   pods: PodInfo[];
@@ -10,6 +11,9 @@ interface PodLegendProps {
   showAllPods?: boolean;
 }
 
+type SortField = 'name' | 'cpu' | 'ram';
+type SortOrder = 'asc' | 'desc';
+
 export default function PodLegend({
   pods,
   selectedPods,
@@ -17,13 +21,30 @@ export default function PodLegend({
   onHighlight,
   showAllPods = true,
 }: PodLegendProps) {
-  const displayPods = selectedPods.length === 0 || selectedPods.length === pods.length
-    ? pods
-    : pods.filter((p) => selectedPods.includes(p.name));
+  const [sortBy, setSortBy] = useState<{ field: SortField; order: SortOrder }>({ field: 'name', order: 'asc' });
 
-  const getPodColor = (index: number): string => {
-    return POD_COLORS[index % POD_COLORS.length];
-  };
+  const displayPods = useMemo(() => {
+    const filtered = selectedPods.length === 0 || selectedPods.length === pods.length
+      ? pods
+      : pods.filter((p) => selectedPods.includes(p.name));
+
+    // Sort pods
+    return [...filtered].sort((a, b) => {
+      let comparison = 0;
+      switch (sortBy.field) {
+        case 'name':
+          comparison = a.name.localeCompare(b.name);
+          break;
+        case 'cpu':
+          comparison = (a.cpu_percent || 0) - (b.cpu_percent || 0);
+          break;
+        case 'ram':
+          comparison = (a.ram_percent || 0) - (b.ram_percent || 0);
+          break;
+      }
+      return sortBy.order === 'asc' ? comparison : -comparison;
+    });
+  }, [pods, selectedPods, sortBy]);
 
   const handlePodClick = (podName: string) => {
     if (highlightedPod === podName) {
@@ -39,13 +60,39 @@ export default function PodLegend({
 
   return (
     <div className="space-y-2">
-      <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-        Replicasets ({displayPods.length})
-      </h4>
+      <div className="flex items-center justify-between">
+        <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+          Replicasets ({displayPods.length})
+        </h4>
+        <div className="flex gap-1">
+          {(['name', 'cpu', 'ram'] as const).map((field) => (
+            <button
+              key={field}
+              type="button"
+              onClick={() => setSortBy((prev) => ({
+                field,
+                order: prev.field === field && prev.order === 'asc' ? 'desc' : 'asc',
+              }))}
+              className={`p-1 rounded transition-colors ${
+                sortBy.field === field
+                  ? 'text-primary-600 bg-primary-50'
+                  : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+              }`}
+              title={`Sort by ${field}`}
+            >
+              {field === 'name' ? (
+                <span className="text-xs font-medium">A-Z</span>
+              ) : (
+                <span className="text-xs font-medium">{field.toUpperCase()}</span>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="space-y-1 max-h-64 overflow-y-auto">
-        {displayPods.map((pod, index) => {
+        {displayPods.map((pod) => {
           const isHighlighted = highlightedPod === pod.name;
-          const color = getPodColor(index);
+          const color = getPodColor(pod.name); // No index - always use hash for consistent color
 
           return (
             <button

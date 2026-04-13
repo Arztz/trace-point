@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { FiRefreshCw, FiDownload, FiActivity, FiAlertTriangle, FiTrendingUp, FiServer, FiCalendar } from 'react-icons/fi';
 import { TIME_RANGES, TimelineData, TimelineMetric, SpikeListResponse, PodInfo, AvailablePod } from '../types';
@@ -188,15 +188,23 @@ export default function Dashboard() {
     setDebouncedSelectedPods(selectedPods);
   }, [selectedPods]);
 
-  const handleRefresh = () => {
+  // Export error state
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  const handleRefresh = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['timeline'] });
     queryClient.invalidateQueries({ queryKey: ['spikes'] });
     queryClient.invalidateQueries({ queryKey: ['gravityScores'] });
-  };
+  }, [queryClient]);
 
-  const handleExport = async () => {
+  const handleExport = useCallback(async () => {
+    setExportError(null);
     try {
-      const data = await api.export.json({ namespace, startTime: undefined, endTime: undefined });
+      const data = await api.export.json({ 
+        namespace: debouncedNamespace, 
+        startTime: undefined, 
+        endTime: undefined 
+      });
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -207,9 +215,10 @@ export default function Dashboard() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch (error) {
-      console.error('Export failed:', error);
+      const message = error instanceof Error ? error.message : 'Export failed';
+      setExportError(message);
     }
-  };
+  }, [debouncedNamespace]);
 
   const { data: timelineData, isLoading: timelineLoading, isError: timelineError } = useQuery({
     queryKey: ['timeline', timeRange, debouncedNamespace, debouncedPodName, debouncedSelectedPods.join(',')],
@@ -224,6 +233,7 @@ export default function Dashboard() {
       });
       return transformTimelineData(raw);
     },
+    staleTime: 10000, // Keep data fresh for 10s - no loading spinner on background refetches
     refetchInterval: 30000,
   });
 
@@ -237,6 +247,7 @@ export default function Dashboard() {
       const raw = await api.spikes.list({ namespace: debouncedNamespace, podName: debouncedPodName });
       return transformSpikesData(raw);
     },
+    staleTime: 10000, // Keep data fresh for 10s - no loading spinner on background refetches
     refetchInterval: 30000,
   });
 
@@ -302,6 +313,11 @@ export default function Dashboard() {
             <FiDownload className="w-4 h-4 mr-1.5" />
             Export
           </button>
+          {exportError && (
+            <div className="text-sm text-red-600">
+              Export failed: {exportError}
+            </div>
+          )}
         </div>
       </div>
 
