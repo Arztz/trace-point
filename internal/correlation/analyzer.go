@@ -159,8 +159,14 @@ func (a *Analyzer) AnalyzeSpikes(ctx context.Context, client *prometheus.Client,
 		namespaces = []string{req.Namespace}
 	}
 
+	// Get aggregation level from the client
+	level := prometheus.AggregationByPod
+	if client.UseDeploymentAggregation() {
+		level = prometheus.AggregationByDeployment
+	}
+
 	// Fetch CPU metrics
-	cpuQuery := prometheus.BuildCPUUtilizationQuery(namespaces, nil)
+	cpuQuery := prometheus.BuildCPUUtilizationQueryWithAggregation(namespaces, nil, level)
 	a.log.Debug("[Analyzer] Querying CPU metrics: %s", cpuQuery)
 	a.log.Debug("[Analyzer] Time range: start=%s end=%s step=%s", req.Start.Format(time.RFC3339), req.End.Format(time.RFC3339), step)
 	cpuResults, err := client.QueryRange(ctx, cpuQuery, req.Start, req.End, step)
@@ -172,7 +178,7 @@ func (a *Analyzer) AnalyzeSpikes(ctx context.Context, client *prometheus.Client,
 	a.log.Debug("[Analyzer] CPU range results: %d", len(cpuResults))
 
 	// Fetch RAM metrics
-	ramQuery := prometheus.BuildRAMUtilizationQuery(namespaces, nil)
+	ramQuery := prometheus.BuildRAMUtilizationQueryWithAggregation(namespaces, nil, level)
 	a.log.Debug("[Analyzer] Querying RAM metrics: %s", ramQuery)
 	ramResults, err := client.QueryRange(ctx, ramQuery, req.Start, req.End, step)
 	if err != nil {
@@ -198,7 +204,8 @@ func (a *Analyzer) AnalyzeSpikes(ctx context.Context, client *prometheus.Client,
 	}
 
 	// Process metrics into time series data
-	timeSeries := processRangeResults(cpuResults, ramResults, req.Replicaset)
+	// Pass the aggregation level so processRangeResults knows which label to use
+	timeSeries := processRangeResults(cpuResults, ramResults, req.Replicaset, level)
 
 	a.log.Debug("[Analyzer] Processed %d time series", len(timeSeries))
 
@@ -285,15 +292,32 @@ type TimeSeries struct {
 }
 
 // processRangeResults processes Prometheus range query results into time series
-func processRangeResults(cpuResults, ramResults []prometheus.Result, replicasetFilter string) []TimeSeries {
+// level indicates whether aggregation is by pod or deployment
+func processRangeResults(cpuResults, ramResults []prometheus.Result, replicasetFilter string, level prometheus.AggregationLevel) []TimeSeries {
+	// Determine which label to use for grouping (pod or deployment)
+	podLabel := "pod"
+	if level == prometheus.AggregationByDeployment {
+		podLabel = "deployment"
+	}
+
 	// Build CPU map: key -> time series
 	cpuMap := make(map[string]*TimeSeries)
 
 	for _, r := range cpuResults {
-		podName := r.Metric["pod"]
+		// Support both pod and deployment labels
+		podName := r.Metric[podLabel]
+		if podName == "" {
+			podName = r.Metric["pod"] // Fallback
+		}
 		namespace := r.Metric["namespace"]
 		containerName := r.Metric["container"]
-		replicasetName := prometheus.ExtractReplicasetName(podName)
+
+		// For deployment aggregation, the name IS the deployment
+		// For pod aggregation, extract replicaset name from pod name
+		replicasetName := podName
+		if level != prometheus.AggregationByDeployment {
+			replicasetName = prometheus.ExtractReplicasetName(podName)
+		}
 
 		// Apply replicaset filter if specified
 		if replicasetFilter != "" && replicasetName != replicasetFilter {
@@ -394,7 +418,11 @@ func processRangeResults(cpuResults, ramResults []prometheus.Result, replicasetF
 	fmt.Printf("[DEBUG] CPU points before RAM merge: total=%d\n", cpuPointsCount)
 
 	for _, r := range ramResults {
-		podName := r.Metric["pod"]
+		// Support both pod and deployment labels
+		podName := r.Metric[podLabel]
+		if podName == "" {
+			podName = r.Metric["pod"] // Fallback
+		}
 		namespace := r.Metric["namespace"]
 		containerName := r.Metric["container"]
 		key := fmt.Sprintf("%s/%s/%s", namespace, podName, containerName)

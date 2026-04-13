@@ -91,10 +91,11 @@ func extractValueFromResult(value interface{}) float64 {
 
 // Client handles communication with Prometheus
 type Client struct {
-	httpClient *http.Client
-	baseURL    string
-	timeout    time.Duration
-	logger     *logger.Logger
+	httpClient               *http.Client
+	baseURL                  string
+	timeout                  time.Duration
+	logger                   *logger.Logger
+	useDeploymentAggregation bool // Use deployment-level aggregation for better performance
 }
 
 // NewClient creates a new Prometheus client
@@ -111,11 +112,17 @@ func NewClient(cfg *config.PrometheusConfig, logger *logger.Logger) *Client {
 	}
 
 	return &Client{
-		httpClient: httpClient,
-		baseURL:    cfg.URL,
-		timeout:    cfg.Timeout,
-		logger:     logger,
+		httpClient:               httpClient,
+		baseURL:                  cfg.URL,
+		timeout:                  cfg.Timeout,
+		logger:                   logger,
+		useDeploymentAggregation: cfg.UseDeploymentAggregation,
 	}
+}
+
+// UseDeploymentAggregation returns whether deployment-level aggregation is enabled
+func (c *Client) UseDeploymentAggregation() bool {
+	return c.useDeploymentAggregation
 }
 
 // MetricQueryResult represents the result of a Prometheus query
@@ -260,9 +267,16 @@ type ContainerMetrics struct {
 }
 
 // FetchContainerMetrics fetches CPU and RAM metrics for all containers
+// When useDeploymentAggregation is true, results are aggregated by deployment instead of pod
 func (c *Client) FetchContainerMetrics(ctx context.Context, namespaces []string, excludePatterns []string) ([]ContainerMetrics, error) {
+	// Determine aggregation level based on config
+	level := AggregationByPod
+	if c.useDeploymentAggregation {
+		level = AggregationByDeployment
+	}
+
 	// Query CPU utilization
-	cpuQuery := BuildCPUUtilizationQuery(namespaces, excludePatterns)
+	cpuQuery := BuildCPUUtilizationQueryWithAggregation(namespaces, excludePatterns, level)
 	cpuResults, err := c.Query(ctx, cpuQuery, time.Now())
 	if err != nil {
 		c.logger.Error("Failed to query CPU metrics: %v", err)
@@ -270,7 +284,7 @@ func (c *Client) FetchContainerMetrics(ctx context.Context, namespaces []string,
 	}
 
 	// Query RAM utilization
-	ramQuery := BuildRAMUtilizationQuery(namespaces, excludePatterns)
+	ramQuery := BuildRAMUtilizationQueryWithAggregation(namespaces, excludePatterns, level)
 	ramResults, err := c.Query(ctx, ramQuery, time.Now())
 	if err != nil {
 		c.logger.Error("Failed to query RAM metrics: %v", err)
@@ -280,9 +294,19 @@ func (c *Client) FetchContainerMetrics(ctx context.Context, namespaces []string,
 	// Build metric map by container
 	metricsMap := make(map[string]*ContainerMetrics)
 
+	// Determine which label to use for grouping (pod or deployment)
+	podLabel := "pod"
+	if c.useDeploymentAggregation {
+		podLabel = "deployment"
+	}
+
 	// Process CPU results
 	for _, r := range cpuResults {
-		podName := r.Metric["pod"]
+		// Support both pod and deployment labels
+		podName := r.Metric[podLabel]
+		if podName == "" {
+			podName = r.Metric["pod"] // Fallback
+		}
 		namespace := r.Metric["namespace"]
 		containerName := r.Metric["container"]
 		key := fmt.Sprintf("%s/%s/%s", namespace, podName, containerName)
@@ -307,7 +331,11 @@ func (c *Client) FetchContainerMetrics(ctx context.Context, namespaces []string,
 
 	// Process RAM results
 	for _, r := range ramResults {
-		podName := r.Metric["pod"]
+		// Support both pod and deployment labels
+		podName := r.Metric[podLabel]
+		if podName == "" {
+			podName = r.Metric["pod"] // Fallback
+		}
 		namespace := r.Metric["namespace"]
 		containerName := r.Metric["container"]
 		key := fmt.Sprintf("%s/%s/%s", namespace, podName, containerName)
@@ -459,8 +487,14 @@ func (c *Client) QueryTimelineMetrics(ctx context.Context, namespaces []string, 
 		c.logger.Debug("Filtering to replicasets: %v", replicasetFilterMap)
 	}
 
+	// Determine aggregation level based on config
+	level := AggregationByPod
+	if c.useDeploymentAggregation {
+		level = AggregationByDeployment
+	}
+
 	// Build CPU query
-	cpuQuery := BuildCPUUtilizationQuery(namespaces, nil)
+	cpuQuery := BuildCPUUtilizationQueryWithAggregation(namespaces, nil, level)
 	c.logger.Debug("Querying CPU timeline metrics: %s", cpuQuery)
 
 	// Query CPU range
@@ -474,7 +508,7 @@ func (c *Client) QueryTimelineMetrics(ctx context.Context, namespaces []string, 
 	}
 
 	// Build RAM query
-	ramQuery := BuildRAMUtilizationQuery(namespaces, nil)
+	ramQuery := BuildRAMUtilizationQueryWithAggregation(namespaces, nil, level)
 	c.logger.Debug("Querying RAM timeline metrics: %s", ramQuery)
 
 	// Query RAM range
@@ -485,6 +519,12 @@ func (c *Client) QueryTimelineMetrics(ctx context.Context, namespaces []string, 
 		ramResults = []Result{}
 	}
 
+	// Determine which label to use for grouping (pod or deployment)
+	podLabel := "pod"
+	if c.useDeploymentAggregation {
+		podLabel = "deployment"
+	}
+
 	// Build metric map keyed by timestamp and container
 	// Structure: map[timestamp][containerKey] -> cpuPercent
 	cpuMap := make(map[string]map[string]float64)
@@ -492,7 +532,11 @@ func (c *Client) QueryTimelineMetrics(ctx context.Context, namespaces []string, 
 
 	// Process CPU results - each result has Values array for range query
 	for _, r := range cpuResults {
-		podName := r.Metric["pod"]
+		// Support both pod and deployment labels
+		podName := r.Metric[podLabel]
+		if podName == "" {
+			podName = r.Metric["pod"] // Fallback
+		}
 		namespace := r.Metric["namespace"]
 		containerName := r.Metric["container"]
 		containerKey := fmt.Sprintf("%s/%s/%s", namespace, podName, containerName)
@@ -561,7 +605,11 @@ func (c *Client) QueryTimelineMetrics(ctx context.Context, namespaces []string, 
 
 	// Process RAM results
 	for _, r := range ramResults {
-		podName := r.Metric["pod"]
+		// Support both pod and deployment labels
+		podName := r.Metric[podLabel]
+		if podName == "" {
+			podName = r.Metric["pod"] // Fallback
+		}
 		namespace := r.Metric["namespace"]
 		containerName := r.Metric["container"]
 		containerKey := fmt.Sprintf("%s/%s/%s", namespace, podName, containerName)
@@ -728,9 +776,16 @@ type AvailablePod struct {
 // GetAvailablePods fetches all currently running replicasets with their aggregated metrics.
 // This is used for populating the frontend dropdown.
 // Groups pods by replicaset (removing the trailing "-xxxx" hash) and aggregates CPU/RAM.
+// When useDeploymentAggregation is true, results are already aggregated by deployment.
 func (c *Client) GetAvailablePods(ctx context.Context, namespaces []string) ([]AvailablePod, error) {
+	// Determine aggregation level based on config
+	level := AggregationByPod
+	if c.useDeploymentAggregation {
+		level = AggregationByDeployment
+	}
+
 	// Query CPU utilization
-	cpuQuery := BuildCPUUtilizationQuery(namespaces, nil)
+	cpuQuery := BuildCPUUtilizationQueryWithAggregation(namespaces, nil, level)
 	cpuResults, err := c.Query(ctx, cpuQuery, time.Now())
 	if err != nil {
 		c.logger.Error("Failed to query CPU metrics for available pods: %v", err)
@@ -738,11 +793,17 @@ func (c *Client) GetAvailablePods(ctx context.Context, namespaces []string) ([]A
 	}
 
 	// Query RAM utilization
-	ramQuery := BuildRAMUtilizationQuery(namespaces, nil)
+	ramQuery := BuildRAMUtilizationQueryWithAggregation(namespaces, nil, level)
 	ramResults, err := c.Query(ctx, ramQuery, time.Now())
 	if err != nil {
 		c.logger.Error("Failed to query RAM metrics for available pods: %v", err)
 		return nil, err
+	}
+
+	// Determine which label to use for grouping (pod or deployment)
+	podLabel := "pod"
+	if c.useDeploymentAggregation {
+		podLabel = "deployment"
 	}
 
 	// Build metric map keyed by replicaset (not individual pod)
@@ -751,9 +812,18 @@ func (c *Client) GetAvailablePods(ctx context.Context, namespaces []string) ([]A
 
 	// Process CPU results
 	for _, r := range cpuResults {
-		podName := r.Metric["pod"]
+		// Support both pod and deployment labels
+		podName := r.Metric[podLabel]
+		if podName == "" {
+			podName = r.Metric["pod"] // Fallback
+		}
+		// For deployment aggregation, the name IS the deployment
+		// For pod aggregation, extract replicaset name from pod name
+		replicasetName := podName
+		if !c.useDeploymentAggregation {
+			replicasetName = ExtractReplicasetName(podName)
+		}
 		namespace := r.Metric["namespace"]
-		replicasetName := ExtractReplicasetName(podName)
 		key := fmt.Sprintf("%s/%s", namespace, replicasetName)
 
 		cpuPercent := extractValueFromResult(r.Value)
@@ -773,9 +843,18 @@ func (c *Client) GetAvailablePods(ctx context.Context, namespaces []string) ([]A
 
 	// Process RAM results
 	for _, r := range ramResults {
-		podName := r.Metric["pod"]
+		// Support both pod and deployment labels
+		podName := r.Metric[podLabel]
+		if podName == "" {
+			podName = r.Metric["pod"] // Fallback
+		}
+		// For deployment aggregation, the name IS the deployment
+		// For pod aggregation, extract replicaset name from pod name
+		replicasetName := podName
+		if !c.useDeploymentAggregation {
+			replicasetName = ExtractReplicasetName(podName)
+		}
 		namespace := r.Metric["namespace"]
-		replicasetName := ExtractReplicasetName(podName)
 		key := fmt.Sprintf("%s/%s", namespace, replicasetName)
 
 		ramPercent := extractValueFromResult(r.Value)

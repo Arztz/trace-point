@@ -12,6 +12,9 @@ prometheus:
   timeout: 30s
   scrape_interval: 15s
   query_path: "/api/v1/query"
+  # Enable deployment-level aggregation for better performance (reduces cardinality)
+  # When enabled, queries use label_replace to aggregate by deployment instead of pod
+  use_deployment_aggregation: true
 
 # SigNoz integration
 signoz:
@@ -19,6 +22,7 @@ signoz:
   otlp_http: "http://localhost:3301/v1/traces"
   timeout: 30s
   query_path: "/api/v2/query"
+  enabled: true
 
 # Google Cloud integration
 gcloud:
@@ -66,6 +70,6 @@ pod_exclude_patterns:
 
 # Profiler integration
 profiler:
-  enabled: false
-  pyroscope_url: ""
+  enabled: true
+  pyroscope_url: "http://localhost:4040"
   interval: 10s

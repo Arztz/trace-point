@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
-import { FiX, FiClock, FiServer, FiCpu, FiActivity, FiAlertTriangle, FiTarget, FiTrendingUp, FiCode } from 'react-icons/fi';
+import { FiX, FiClock, FiServer, FiCpu, FiActivity, FiAlertTriangle, FiTarget, FiTrendingUp, FiCode, FiZap } from 'react-icons/fi';
 import { api } from '../services/api';
 import { ErrorState, LoadingState } from './States';
-import type { SpikeEvent } from '../types';
+import type { SpikeDetailsResponse, FunctionProfile } from '../types';
 
 interface SpikeDetailProps {
   spikeId: string;
@@ -33,10 +33,83 @@ function getConfidenceLabel(confidence: number): string {
   return 'Low';
 }
 
+function ProfilerSection({ profilerData, culpritFunction }: { profilerData?: { top_functions: FunctionProfile[] }; culpritFunction?: FunctionProfile }) {
+  if (!profilerData && !culpritFunction) {
+    return (
+      <div className="border-t border-gray-200 pt-6">
+        <h3 className="text-sm font-semibold text-gray-900 mb-4">Profiler Data</h3>
+        <p className="text-sm text-gray-500">No profiler data available for this spike.</p>
+      </div>
+    );
+  }
+
+  const functions = profilerData?.top_functions || [];
+
+  return (
+    <div className="border-t border-gray-200 pt-6">
+      <div className="flex items-center gap-2 mb-4">
+        <FiZap className="w-4 h-4 text-amber-500" />
+        <h3 className="text-sm font-semibold text-gray-900">CPU Profile (Flamegraph)</h3>
+      </div>
+
+      {/* Culprit Function Highlight */}
+      {culpritFunction && (
+        <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-lg p-4 mb-4">
+          <div className="flex items-center gap-2 mb-2">
+            <FiAlertTriangle className="w-4 h-4 text-amber-600" />
+            <span className="text-sm font-semibold text-amber-800">Culprit Function</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-lg font-mono text-gray-900">{culpritFunction.function_name}</span>
+            <span className="bg-amber-100 text-amber-800 px-2 py-1 rounded text-xs font-medium">
+              {culpritFunction.cpu_percent.toFixed(1)}% CPU
+            </span>
+          </div>
+          {culpritFunction.file_path && (
+            <div className="flex items-center gap-2 mt-2 text-xs text-gray-600">
+              <FiCode className="w-3 h-3" />
+              <span className="font-mono">{culpritFunction.file_path}:{culpritFunction.line_number}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Top Functions Table */}
+      {functions.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs text-gray-500 mb-2">Top CPU-consuming functions:</p>
+          {functions.slice(0, 5).map((func, idx) => (
+            <div 
+              key={idx}
+              className={`flex items-center justify-between p-2 rounded text-sm ${
+                culpritFunction?.function_name === func.function_name 
+                  ? 'bg-amber-50 border border-amber-200' 
+                  : 'bg-gray-50'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-400 w-4">{idx + 1}</span>
+                <span className="font-mono text-gray-700">{func.function_name}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {func.file_path && (
+                  <span className="text-xs text-gray-500 font-mono">{func.file_path}:{func.line_number}</span>
+                )}
+                <span className="text-xs font-medium text-gray-600">{func.cpu_percent.toFixed(1)}%</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function SpikeDetail({ spikeId, onClose }: SpikeDetailProps) {
-  const { data: spike, isLoading, error } = useQuery<SpikeEvent>({
-    queryKey: ['spike', spikeId],
-    queryFn: () => api.spikes.getById(spikeId),
+  // Use the new details endpoint with profiler data
+  const { data: details, isLoading, error } = useQuery<SpikeDetailsResponse>({
+    queryKey: ['spikeDetails', spikeId],
+    queryFn: () => api.spikes.getDetails(spikeId),
     enabled: !!spikeId,
   });
 
@@ -48,7 +121,7 @@ export default function SpikeDetail({ spikeId, onClose }: SpikeDetailProps) {
     );
   }
 
-  if (error || !spike) {
+  if (error || !details) {
     return (
       <div className="bg-white rounded-lg shadow-lg border border-gray-200 p-6">
         <ErrorState 
@@ -59,6 +132,11 @@ export default function SpikeDetail({ spikeId, onClose }: SpikeDetailProps) {
       </div>
     );
   }
+
+  const spike = details.spike;
+  const profilerData = details.profiler_data;
+  const culpritFunction = details.culprit_function;
+  const activeRoutes = details.active_routes || [];
 
   // Calculate % above average - guard against very small moving averages
   const spikeRatio = spike.movingAverage > 1 
@@ -142,7 +220,30 @@ export default function SpikeDetail({ spikeId, onClose }: SpikeDetailProps) {
           </div>
         </div>
 
-        {/* Root Causes */}
+        {/* Profiler Section */}
+        <ProfilerSection 
+          profilerData={profilerData} 
+          culpritFunction={culpritFunction} 
+        />
+
+        {/* Active Routes */}
+        {activeRoutes.length > 0 && (
+          <div className="border-t border-gray-200 pt-6">
+            <h3 className="text-sm font-semibold text-gray-900 mb-4">Active Routes at Spike Time</h3>
+            <div className="flex flex-wrap gap-2">
+              {activeRoutes.map((route, idx) => (
+                <span 
+                  key={idx}
+                  className="bg-gray-100 text-gray-700 px-3 py-1.5 rounded-full text-sm font-mono"
+                >
+                  {route}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Legacy: Possible Root Causes */}
         {spike.possibleRootCauses && spike.possibleRootCauses.length > 0 && (
           <div className="border-t border-gray-200 pt-6">
             <div className="flex items-center gap-2 mb-4">
@@ -177,23 +278,6 @@ export default function SpikeDetail({ spikeId, onClose }: SpikeDetailProps) {
                     </div>
                   )}
                 </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Active Routes */}
-        {spike.activeRoutes && spike.activeRoutes.length > 0 && (
-          <div className="border-t border-gray-200 pt-6">
-            <h3 className="text-sm font-semibold text-gray-900 mb-4">Active Routes at Spike Time</h3>
-            <div className="flex flex-wrap gap-2">
-              {spike.activeRoutes.map((route, idx) => (
-                <span 
-                  key={idx}
-                  className="bg-gray-100 text-gray-700 px-3 py-1.5 rounded-full text-sm font-mono"
-                >
-                  {route}
-                </span>
               ))}
             </div>
           </div>

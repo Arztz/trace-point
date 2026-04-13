@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { SpikeListResponse, TimelineData, ConfigResponse, GravityScoresResponse, SpikeEvent, TimelineResponse, SpikeAnalysisResponse } from '../types';
+import type { SpikeListResponse, TimelineData, ConfigResponse, GravityScoresResponse, SpikeEvent, TimelineResponse, SpikeAnalysisResponse, SpikeDetailsResponse } from '../types';
 
 const apiClient = axios.create({
   baseURL: '/api/v1',
@@ -31,6 +31,12 @@ export const api = {
     
     getById: async (id: string): Promise<SpikeEvent> => {
       const response = await apiClient.get<SpikeEvent>(`/spikes/${id}`);
+      return response.data;
+    },
+
+    // NEW: Get spike details with profiler data
+    getDetails: async (id: string): Promise<SpikeDetailsResponse> => {
+      const response = await apiClient.get<SpikeDetailsResponse>(`/spikes/${id}/details`);
       return response.data;
     },
   },

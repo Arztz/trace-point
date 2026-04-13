@@ -7,10 +7,28 @@ import (
 
 // Query builders for Prometheus metrics
 
+// AggregationLevel defines the level of aggregation for Prometheus queries
+type AggregationLevel string
+
+const (
+	// AggregationByPod groups metrics by individual pod (default, backward compatible)
+	AggregationByPod AggregationLevel = "pod"
+	// AggregationByDeployment groups metrics by deployment (aggregated using label_replace)
+	AggregationByDeployment AggregationLevel = "deployment"
+)
+
 // BuildCPUUtilizationQuery builds a query for CPU utilization percentage
 // Formula: container_cpu_usage_seconds_total / kube_pod_container_resource_requests (cpu)
 // Returns: percentage of CPU used vs CPU request
+// Uses AggregationByPod by default. Pass AggregationByDeployment for deployment-level aggregation.
 func BuildCPUUtilizationQuery(namespaces []string, excludePatterns []string) string {
+	return BuildCPUUtilizationQueryWithAggregation(namespaces, excludePatterns, AggregationByPod)
+}
+
+// BuildCPUUtilizationQueryWithAggregation builds a query with specified aggregation level.
+// level: AggregationByPod (default) or AggregationByDeployment
+// Using deployment-level saves significant performance by reducing cardinality.
+func BuildCPUUtilizationQueryWithAggregation(namespaces []string, excludePatterns []string, level AggregationLevel) string {
 	// Build selector conditions for metrics
 	var selectorConditions []string
 
@@ -37,6 +55,30 @@ func BuildCPUUtilizationQuery(namespaces []string, excludePatterns []string) str
 	// Using kube_pod_container_resource_requests for CPU request instead of container_spec_cpu_quota
 	// Fix: Use subquery to ensure proper 1:1 matching between usage and request
 	// This prevents issues when Prometheus returns multiple container entries per pod
+
+	if level == AggregationByDeployment {
+		// Deployment-level aggregation: use label_replace to extract deployment name,
+		// then sum by (deployment, namespace, container) to aggregate all pods in a deployment
+		// Pattern (.*)-[a-z0-9]+-[a-z0-9]+ extracts "deployment" from "deployment-hash-uid"
+		query := fmt.Sprintf(
+			`(sum by (deployment, namespace, container) (
+				label_replace(
+					rate(container_cpu_usage_seconds_total{%s}[5m]),
+					"deployment", "$1", "pod", "(.*)-[a-z0-9]+-[a-z0-9]+"
+				)
+			)) / 
+			(sum by (deployment, namespace, container) (
+				label_replace(
+					kube_pod_container_resource_requests{%s, resource="cpu"},
+					"deployment", "$1", "pod", "(.*)-[a-z0-9]+-[a-z0-9]+"
+				)
+			)) * 100`,
+			selector, selector,
+		)
+		return query
+	}
+
+	// Pod-level aggregation (default, backward compatible)
 	query := fmt.Sprintf(
 		`(sum by (pod, namespace, container) (rate(container_cpu_usage_seconds_total{%s}[5m])) / 
 		  sum by (pod, namespace, container) (kube_pod_container_resource_requests{%s, resource="cpu"})) * 100`,
@@ -49,7 +91,15 @@ func BuildCPUUtilizationQuery(namespaces []string, excludePatterns []string) str
 // BuildRAMUtilizationQuery builds a query for RAM utilization percentage
 // Formula: container_memory_working_set_bytes / kube_pod_container_resource_requests (memory)
 // Returns: percentage of RAM used vs RAM request
+// Uses AggregationByPod by default. Pass AggregationByDeployment for deployment-level aggregation.
 func BuildRAMUtilizationQuery(namespaces []string, excludePatterns []string) string {
+	return BuildRAMUtilizationQueryWithAggregation(namespaces, excludePatterns, AggregationByPod)
+}
+
+// BuildRAMUtilizationQueryWithAggregation builds a query with specified aggregation level.
+// level: AggregationByPod (default) or AggregationByDeployment
+// Using deployment-level saves significant performance by reducing cardinality.
+func BuildRAMUtilizationQueryWithAggregation(namespaces []string, excludePatterns []string, level AggregationLevel) string {
 	// Build selector conditions for metrics
 	var selectorConditions []string
 
@@ -77,6 +127,30 @@ func BuildRAMUtilizationQuery(namespaces []string, excludePatterns []string) str
 	// Note: kube_pod_container_resource_requests is a gauge metric (requested amount at point in time),
 	// NOT a counter, so rate() should NOT be applied to it (unlike container_memory_working_set_bytes which is a gauge but works with rate())
 	// Fix: Use subquery to ensure proper 1:1 matching between usage and request
+
+	if level == AggregationByDeployment {
+		// Deployment-level aggregation: use label_replace to extract deployment name,
+		// then sum by (deployment, namespace, container) to aggregate all pods in a deployment
+		// Pattern (.*)-[a-z0-9]+-[a-z0-9]+ extracts "deployment" from "deployment-hash-uid"
+		query := fmt.Sprintf(
+			`(sum by (deployment, namespace, container) (
+				label_replace(
+					rate(container_memory_working_set_bytes{%s}[5m]),
+					"deployment", "$1", "pod", "(.*)-[a-z0-9]+-[a-z0-9]+"
+				)
+			)) / 
+			(sum by (deployment, namespace, container) (
+				label_replace(
+					kube_pod_container_resource_requests{%s, resource="memory"},
+					"deployment", "$1", "pod", "(.*)-[a-z0-9]+-[a-z0-9]+"
+				)
+			)) * 100`,
+			selector, selector,
+		)
+		return query
+	}
+
+	// Pod-level aggregation (default, backward compatible)
 	query := fmt.Sprintf(
 		`(sum by (pod, namespace, container) (rate(container_memory_working_set_bytes{%s}[5m])) / 
 		  sum by (pod, namespace, container) (kube_pod_container_resource_requests{%s, resource="memory"})) * 100`,

@@ -10,7 +10,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/trace-point/trace-point/internal/config"
 	"github.com/trace-point/trace-point/internal/correlation"
+	"github.com/trace-point/trace-point/internal/integration/profiler"
 	"github.com/trace-point/trace-point/internal/integration/prometheus"
+	"github.com/trace-point/trace-point/internal/integration/signoz"
 	"github.com/trace-point/trace-point/internal/storage"
 	"github.com/trace-point/trace-point/internal/utils/logger"
 )
@@ -21,6 +23,20 @@ type Handler struct {
 	prometheusClient *prometheus.Client
 	appConfig        *config.Config
 	analyzer         *correlation.Analyzer
+	signozClient     *signoz.Client
+	profilerClient   *profiler.Client
+}
+
+// Global clients set by main.go
+var (
+	globalSignozClient   *signoz.Client
+	globalProfilerClient *profiler.Client
+)
+
+// SetClients sets global Signoz and Profiler clients
+func SetClients(signozClient *signoz.Client, profilerClient *profiler.Client) {
+	globalSignozClient = signozClient
+	globalProfilerClient = profilerClient
 }
 
 // NewHandler creates a new handler instance
@@ -34,19 +50,36 @@ func NewHandler(repo *storage.Repository, prometheusClient *prometheus.Client, a
 	}
 }
 
+// GetHandler creates a handler with global clients
+func GetHandler(repo *storage.Repository, prometheusClient *prometheus.Client, appConfig *config.Config) *Handler {
+	analyzer := correlation.NewAnalyzer(correlation.DefaultAnalyzerConfig(), logger.Default())
+	return &Handler{
+		repo:             repo,
+		prometheusClient: prometheusClient,
+		appConfig:        appConfig,
+		analyzer:         analyzer,
+		signozClient:     globalSignozClient,
+		profilerClient:   globalProfilerClient,
+	}
+}
+
 // RegisterRoutes registers all API routes
 func RegisterRoutesWithRepo(r chi.Router, repo *storage.Repository, prometheusClient *prometheus.Client, appConfig *config.Config) {
-	h := NewHandler(repo, prometheusClient, appConfig)
+	// Also accept Signoz and Profiler clients from main.go via package-level vars
+	h := GetHandler(repo, prometheusClient, appConfig)
 
 	// Export handler routes
 	r.Get("/export", h.handleExportSpikes)
 	r.Get("/export/refactoring", h.handleExportRefactoring)
 
-	// Spike events routes
+	// Spike events routes - NOTE: order matters! More specific routes first
+	// NEW: Spike details endpoint with profiler data (must be before /spikes/{id})
+	r.Get("/spikes/{id}/details", h.handleSpikeDetails)
+
 	r.Get("/spikes", h.handleSpikes)
 	r.Get("/spikes/{id}", h.handleSpikeByID)
 
-	// Spike analyze route (NEW)
+	// Spike analyze route
 	r.Get("/spikes/analyze", h.handleSpikesAnalyze)
 
 	// Timeline route
@@ -121,6 +154,115 @@ func (h *Handler) handleSpikeByID(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(event)
+}
+
+// SpikeDetailsResponse represents the spike details API response
+type SpikeDetailsResponse struct {
+	Spike           *storage.SpikeEvent       `json:"spike"`
+	ProfilerData    *profiler.ProfileResult   `json:"profiler_data,omitempty"`
+	TraceData       *signoz.TraceQueryResult  `json:"trace_data,omitempty"`
+	ActiveRoutes    []string                  `json:"active_routes"`
+	CulpritFunction *profiler.FunctionProfile `json:"culprit_function,omitempty"`
+}
+
+// handleSpikeDetails returns spike details including profiler data
+func (h *Handler) handleSpikeDetails(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	ctx := r.Context()
+
+	id := chi.URLParam(r, "id")
+
+	logger.Debug("[API] handleSpikeDetails START | Method=%s | Path=%s | id=%s",
+		r.Method, r.URL.Path, id)
+
+	// Get the spike event
+	event, err := h.repo.GetSpikeEvent(ctx, id)
+	if err != nil {
+		logger.Error("[API] handleSpikeDetails ERROR | id=%s | err=%v | duration=%v", id, err, time.Since(startTime))
+		http.Error(w, fmt.Sprintf("Failed to fetch spike event: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if event == nil {
+		logger.Debug("[API] handleSpikeDetails NOT_FOUND | id=%s | duration=%v", id, time.Since(startTime))
+		http.Error(w, "Spike event not found", http.StatusNotFound)
+		return
+	}
+
+	// Build response
+	response := &SpikeDetailsResponse{
+		Spike:        event,
+		ActiveRoutes: []string{},
+	}
+
+	// Query profiler if available
+	if h.profilerClient != nil && event.Timestamp.After(time.Now().Add(-24*time.Hour)) {
+		// Query profiler for the spike time range (5 minutes before spike)
+		startTime := event.Timestamp.Add(-5 * time.Minute)
+		endTime := event.Timestamp
+
+		profile, err := h.profilerClient.QueryProfile(ctx, event.Namespace, event.PodName, startTime, endTime)
+		if err != nil {
+			logger.Warn("Failed to query profiler for spike %s: %v", id, err)
+		} else {
+			response.ProfilerData = profile
+
+			// Extract culprit function
+			if len(profile.TopFunctions) > 0 {
+				for _, f := range profile.TopFunctions {
+					if f.FilePath != "" && f.CPUPercent > 0 {
+						response.CulpritFunction = &profiler.FunctionProfile{
+							FunctionName: f.FunctionName,
+							FilePath:     f.FilePath,
+							LineNumber:   f.LineNumber,
+							CPUPercent:   f.CPUPercent,
+						}
+						break
+					}
+				}
+				// Fallback to top function
+				if response.CulpritFunction == nil && len(profile.TopFunctions) > 0 {
+					top := profile.TopFunctions[0]
+					response.CulpritFunction = &profiler.FunctionProfile{
+						FunctionName: top.FunctionName,
+						FilePath:     top.FilePath,
+						LineNumber:   top.LineNumber,
+						CPUPercent:   top.CPUPercent,
+					}
+				}
+			}
+		}
+	}
+
+	// Query Signoz if available
+	if h.signozClient != nil && event.Timestamp.After(time.Now().Add(-24*time.Hour)) {
+		startTime := event.Timestamp.Add(-5 * time.Minute)
+		endTime := event.Timestamp
+
+		traces, err := h.signozClient.QueryTraces(ctx, event.Namespace, event.PodName, startTime, endTime)
+		if err != nil {
+			logger.Warn("Failed to query Signoz for spike %s: %v", id, err)
+		} else {
+			response.TraceData = traces
+
+			// Extract active routes
+			routeMap := make(map[string]bool)
+			for _, trace := range traces.Traces {
+				if trace.Route != "" {
+					routeMap[trace.Route] = true
+				}
+			}
+			for route := range routeMap {
+				response.ActiveRoutes = append(response.ActiveRoutes, route)
+			}
+		}
+	}
+
+	logger.Debug("[API] handleSpikeDetails SUCCESS | id=%s | profiler=%v | trace=%v | routes=%d | duration=%v",
+		id, response.ProfilerData != nil, response.TraceData != nil, len(response.ActiveRoutes), time.Since(startTime))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 // handleTimeline returns timeline data for visualization

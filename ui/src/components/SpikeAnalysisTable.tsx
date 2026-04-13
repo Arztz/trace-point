@@ -9,17 +9,19 @@ interface SpikeAnalysisTableProps {
 }
 
 // Sort field types
-type SortField = 'timestamp' | 'replicaset_name' | 'pod_name' | 'type' | 'deviation_percent' | 'severity';
+type SortField = 'timestamp' | 'replicaset_name' | 'type' | 'deviation_percent' | 'severity' | 'cpu_percent' | 'ram_percent' | 'moving_average';
 type SortOrder = 'asc' | 'desc';
 
 // Sort configurations
 const SORT_OPTIONS: { value: SortField; label: string }[] = [
   { value: 'timestamp', label: 'Time' },
-  { value: 'replicaset_name', label: 'Replicaset' },
-  { value: 'pod_name', label: 'Pod' },
+  { value: 'replicaset_name', label: 'Deployment' },
   { value: 'type', label: 'Type' },
   { value: 'deviation_percent', label: 'Deviation' },
   { value: 'severity', label: 'Severity' },
+  { value: 'cpu_percent', label: 'CPU' },
+  { value: 'ram_percent', label: 'RAM' },
+  { value: 'moving_average', label: 'Average' },
 ];
 
 // Format timestamp
@@ -100,9 +102,6 @@ export default function SpikeAnalysisTable({ spikes, isLoading }: SpikeAnalysisT
         case 'replicaset_name':
           comparison = a.replicaset_name.localeCompare(b.replicaset_name);
           break;
-        case 'pod_name':
-          comparison = a.pod_name.localeCompare(b.pod_name);
-          break;
         case 'type':
           comparison = a.type.localeCompare(b.type);
           break;
@@ -113,6 +112,17 @@ export default function SpikeAnalysisTable({ spikes, isLoading }: SpikeAnalysisT
           // Order: critical > medium > low > normal
           const severityOrder: Record<string, number> = { critical: 4, medium: 3, low: 2, normal: 1 };
           comparison = (severityOrder[a.severity] || 0) - (severityOrder[b.severity] || 0);
+          break;
+        case 'cpu_percent':
+          comparison = a.cpu_percent - b.cpu_percent;
+          break;
+        case 'ram_percent':
+          comparison = a.ram_percent - b.ram_percent;
+          break;
+        case 'moving_average':
+          const avgA = a.type === 'cpu' || a.type === 'both' ? a.moving_average_cpu : a.moving_average_ram;
+          const avgB = b.type === 'cpu' || b.type === 'both' ? b.moving_average_cpu : b.moving_average_ram;
+          comparison = avgA - avgB;
           break;
       }
       
@@ -204,15 +214,6 @@ export default function SpikeAnalysisTable({ spikes, isLoading }: SpikeAnalysisT
                     </div>
                   </th>
                 ))}
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  CPU %
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  RAM %
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  Avg %
-                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -235,13 +236,6 @@ export default function SpikeAnalysisTable({ spikes, isLoading }: SpikeAnalysisT
                           {getReplicasetName(spike.pod_name)}
                         </span>
                       </div>
-                    </td>
-                    
-                    {/* Pod */}
-                    <td className="px-4 py-3">
-                      <span className="text-sm text-gray-600 font-mono">
-                        {spike.pod_name}
-                      </span>
                     </td>
                     
                     {/* Type */}

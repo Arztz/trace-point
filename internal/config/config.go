@@ -30,10 +30,11 @@ type AppConfig struct {
 
 // PrometheusConfig holds Prometheus integration settings
 type PrometheusConfig struct {
-	URL            string        `mapstructure:"url"`
-	Timeout        time.Duration `mapstructure:"timeout"`
-	ScrapeInterval time.Duration `mapstructure:"scrape_interval"`
-	QueryPath      string        `mapstructure:"query_path"`
+	URL                      string        `mapstructure:"url"`
+	Timeout                  time.Duration `mapstructure:"timeout"`
+	ScrapeInterval           time.Duration `mapstructure:"scrape_interval"`
+	QueryPath                string        `mapstructure:"query_path"`
+	UseDeploymentAggregation bool          `mapstructure:"use_deployment_aggregation"` // Enable deployment-level aggregation for better performance
 }
 
 // SignozConfig holds SigNoz integration settings
@@ -42,6 +43,7 @@ type SignozConfig struct {
 	OTLPHTTP  string        `mapstructure:"otlp_http"`
 	Timeout   time.Duration `mapstructure:"timeout"`
 	QueryPath string        `mapstructure:"query_path"`
+	Enabled   bool          `mapstructure:"enabled"`
 }
 
 // GCloudConfig holds Google Cloud integration settings
@@ -65,12 +67,12 @@ type DetectionConfig struct {
 
 // DiscordConfig holds Discord notification settings
 type DiscordConfig struct {
-	Enabled        bool     `mapstructure:"enabled"`
-	WebhookURL     string   `mapstructure:"webhook_url"`
-	MentionUser    string   `mapstructure:"mention_user"`
-	MentionRole    string   `mapstructure:"mention_role"`
-	Alerts         []string `mapstructure:"alerts"`
-	CooldownMinutes int     `mapstructure:"cooldown_minutes"`
+	Enabled         bool     `mapstructure:"enabled"`
+	WebhookURL      string   `mapstructure:"webhook_url"`
+	MentionUser     string   `mapstructure:"mention_user"`
+	MentionRole     string   `mapstructure:"mention_role"`
+	Alerts          []string `mapstructure:"alerts"`
+	CooldownMinutes int      `mapstructure:"cooldown_minutes"`
 }
 
 // DatabaseConfig holds database settings
@@ -86,6 +88,7 @@ type ProfilerConfig struct {
 	Enabled      bool          `mapstructure:"enabled"`
 	PyroscopeURL string        `mapstructure:"pyroscope_url"`
 	Interval     time.Duration `mapstructure:"interval"`
+	Timeout      time.Duration `mapstructure:"timeout"`
 }
 
 // Load loads configuration from config file
@@ -113,7 +116,12 @@ func Load(configPath string) (*Config, error) {
 	viper.SetDefault("detection.min_samples", 3)
 	viper.SetDefault("prometheus.timeout", "30s")
 	viper.SetDefault("prometheus.scrape_interval", "15s")
+	viper.SetDefault("prometheus.use_deployment_aggregation", false) // Default to false for backward compatibility
 	viper.SetDefault("signoz.timeout", "30s")
+
+	// Set default profiler timeout
+	viper.SetDefault("profiler.interval", "10s")
+	viper.SetDefault("profiler.timeout", "30s")
 
 	// Load config
 	if err := viper.ReadInConfig(); err != nil {

@@ -16,7 +16,9 @@ import (
 	"github.com/trace-point/trace-point/internal/config"
 	"github.com/trace-point/trace-point/internal/correlation"
 	"github.com/trace-point/trace-point/internal/integration/discord"
+	"github.com/trace-point/trace-point/internal/integration/profiler"
 	"github.com/trace-point/trace-point/internal/integration/prometheus"
+	"github.com/trace-point/trace-point/internal/integration/signoz"
 	"github.com/trace-point/trace-point/internal/server/handlers"
 	"github.com/trace-point/trace-point/internal/storage"
 	"github.com/trace-point/trace-point/internal/utils/logger"
@@ -76,6 +78,23 @@ func main() {
 	// Initialize Prometheus client
 	logger.Info("Initializing Prometheus client...")
 	prometheusClient := prometheus.NewClient(&cfg.Prometheus, logger.Default())
+
+	// Initialize Signoz client if enabled
+	var signozClient *signoz.Client
+	if cfg.Signoz.Enabled && cfg.Signoz.URL != "" {
+		signozClient = signoz.NewClient(&cfg.Signoz, &cfg.GCloud, logger.Default())
+		logger.Info("SigNoz client initialized: %s", cfg.Signoz.URL)
+	}
+
+	// Initialize Profiler client if enabled
+	var profilerClient *profiler.Client
+	if cfg.Profiler.Enabled && cfg.Profiler.PyroscopeURL != "" {
+		profilerClient = profiler.NewClient(&cfg.Profiler, &cfg.GCloud, logger.Default())
+		logger.Info("Profiler client initialized: %s", cfg.Profiler.PyroscopeURL)
+	}
+
+	// Set global clients for handlers
+	handlers.SetClients(signozClient, profilerClient)
 
 	// Test Prometheus connection
 	testCtx, testCancel := context.WithTimeout(context.Background(), 10*time.Second)
