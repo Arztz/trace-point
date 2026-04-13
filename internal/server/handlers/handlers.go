@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/trace-point/trace-point/internal/config"
+	"github.com/trace-point/trace-point/internal/correlation"
 	"github.com/trace-point/trace-point/internal/integration/prometheus"
 	"github.com/trace-point/trace-point/internal/storage"
 	"github.com/trace-point/trace-point/internal/utils/logger"
@@ -19,14 +20,17 @@ type Handler struct {
 	repo             *storage.Repository
 	prometheusClient *prometheus.Client
 	appConfig        *config.Config
+	analyzer         *correlation.Analyzer
 }
 
 // NewHandler creates a new handler instance
 func NewHandler(repo *storage.Repository, prometheusClient *prometheus.Client, appConfig *config.Config) *Handler {
+	analyzer := correlation.NewAnalyzer(correlation.DefaultAnalyzerConfig(), logger.Default())
 	return &Handler{
 		repo:             repo,
 		prometheusClient: prometheusClient,
 		appConfig:        appConfig,
+		analyzer:         analyzer,
 	}
 }
 
@@ -41,6 +45,9 @@ func RegisterRoutesWithRepo(r chi.Router, repo *storage.Repository, prometheusCl
 	// Spike events routes
 	r.Get("/spikes", h.handleSpikes)
 	r.Get("/spikes/{id}", h.handleSpikeByID)
+
+	// Spike analyze route (NEW)
+	r.Get("/spikes/analyze", h.handleSpikesAnalyze)
 
 	// Timeline route
 	r.Get("/timeline", h.handleTimeline)
@@ -655,4 +662,104 @@ func safeString(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// handleSpikesAnalyze performs historical spike analysis
+func (h *Handler) handleSpikesAnalyze(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	ctx := r.Context()
+
+	logger.Debug("[API] handleSpikesAnalyze START | Method=%s | Path=%s | Query=%s",
+		r.Method, r.URL.Path, r.URL.RawQuery)
+
+	// Parse query params
+	startStr := r.URL.Query().Get("start")
+	endStr := r.URL.Query().Get("end")
+	window := r.URL.Query().Get("window")
+	namespace := r.URL.Query().Get("namespace")
+	replicaset := r.URL.Query().Get("replicaset")
+	thresholdStr := r.URL.Query().Get("threshold")
+	limitStr := r.URL.Query().Get("limit")
+	offsetStr := r.URL.Query().Get("offset")
+
+	// Validate required params
+	if startStr == "" {
+		http.Error(w, "Missing required parameter: start", http.StatusBadRequest)
+		return
+	}
+
+	// Parse time parameters
+	startTime, err := correlation.ParseTime(startStr)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Invalid start time format: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	endTime := time.Now()
+	if endStr != "" {
+		endTime, err = correlation.ParseTime(endStr)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Invalid end time format: %v", err), http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Validate time range
+	if endTime.Before(startTime) {
+		http.Error(w, "End time must be after start time", http.StatusBadRequest)
+		return
+	}
+
+	// Parse optional parameters
+	var threshold float64 = 50.0
+	if thresholdStr != "" {
+		if _, err := fmt.Sscanf(thresholdStr, "%f", &threshold); err != nil {
+			http.Error(w, "Invalid threshold parameter", http.StatusBadRequest)
+			return
+		}
+	}
+
+	limit := 1000
+	if limitStr != "" {
+		if _, err := fmt.Sscanf(limitStr, "%d", &limit); err != nil {
+			http.Error(w, "Invalid limit parameter", http.StatusBadRequest)
+			return
+		}
+	}
+
+	offset := 0
+	if offsetStr != "" {
+		if _, err := fmt.Sscanf(offsetStr, "%d", &offset); err != nil {
+			http.Error(w, "Invalid offset parameter", http.StatusBadRequest)
+			return
+		}
+	}
+
+	logger.Debug("[API] handleSpikesAnalyze | start=%s | end=%s | window=%s | namespace=%s | replicaset=%s | threshold=%.0f%% | limit=%d | offset=%d",
+		startTime.Format(time.RFC3339), endTime.Format(time.RFC3339), window, namespace, replicaset, threshold, limit, offset)
+
+	// Create analysis request
+	req := &correlation.SpikeAnalysisRequest{
+		Start:      startTime,
+		End:        endTime,
+		Window:     window,
+		Namespace:  namespace,
+		Replicaset: replicaset,
+		Threshold:  threshold,
+		Limit:      limit,
+		Offset:     offset,
+	}
+
+	// Perform analysis
+	response, err := h.analyzer.AnalyzeSpikes(ctx, h.prometheusClient, req)
+	if err != nil {
+		logger.Error("[API] handleSpikesAnalyze ERROR | err=%v | duration=%v", err, time.Since(startTime))
+		http.Error(w, fmt.Sprintf("Analysis failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	logger.Debug("[API] handleSpikesAnalyze SUCCESS | spikes_count=%d | duration=%v", len(response.Spikes), time.Since(startTime))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }

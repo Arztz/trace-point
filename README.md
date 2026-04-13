@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go" alt="Go Version">
   <img src="https://img.shields.io/badge/React-18+-61DAFB?style=flat&logo=react" alt="React Version">
   <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License">
-  <img src="https://img.shields.io/badge/Version-1.0.2-success.svg" alt="Version">
+  <img src="https://img.shields.io/badge/Version-1.0.3-success.svg" alt="Version">
 </p>
 
 Trace-Point is an automated tool designed to correlate Kubernetes resource spikes with code-level root causes. It integrates data from Prometheus (metrics), Signoz (traces), and Google Cloud Profiler (samples) to provide complete root cause analysis through a web dashboard and Discord alerts.
@@ -410,9 +410,111 @@ namespaces:
 
 ---
 
+---
+
+## v1.0.3 - Spike Explorer (Historical Spike Analysis)
+
+### New Feature: Historical Analysis
+
+The Spike Explorer allows you to analyze spike events over historical time ranges - not just real-time detection.
+
+**Key Features:**
+- Analyze spikes over last 24 hours, 7 days, 30 days, or custom time range
+- Moving window slides from start to end to detect ALL spikes
+- Summary statistics: total spikes, top offenders, spikes by type
+- Filter by namespace or replicaset
+
+### Spike Explorer Tab
+
+Navigate to the "Spike Explorer" tab in the dashboard:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Timeline | Spike Explorer | Gravity Scores                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  [24h] [7d] [30d] [Custom]                                        │
+│  Window: [30m ▼]  Namespace: [All ▼]  [Analyze]                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐ ┌───────────────┐ ┌─────────────────────────┐  │
+│  │ Total Spikes │ │ Analyzed RS   │ │ Top Offender             │  │
+│  │     42      │ │      15       │ │ mongodb-replica (12)    │  │
+│  └─────────────┘ └───────────────┘ └─────────────────────────┘  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  Timestamp      │ Replicaset    │ Type │ Deviation │ Severity   │
+│  14:32         │ mongodb      │ CPU  │ 113.75%   │ 🔴 Critical│
+│  18:15         │ payment-svc   │ RAM │  78.20%   │ 🟠 Medium │
+│  09:45         │ auth-svc      │ CPU │  102.50%  │ 🔴 Critical│
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### API Endpoint
+
+```
+GET /api/v1/spikes/analyze
+```
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `start` | string | Yes | - | Start time (RFC3339 or relative: 24h, 7d) |
+| `end` | string | No | now | End time (RFC3339 or relative) |
+| `window` | string | No | 30m | Moving average window (5m, 15m, 30m, 1h) |
+| `namespace` | string | No | all | Filter by namespace |
+| `replicaset` | string | No | all | Filter by replicaset |
+| `threshold` | float | No | 50.0 | Spike threshold percentage |
+| `limit` | int | No | 1000 | Max results |
+| `offset` | int | No | 0 | Pagination offset |
+
+**Examples:**
+
+```bash
+# Last 24 hours
+curl "http://localhost:8081/api/v1/spikes/analyze?start=24h&window=30m"
+
+# Last 7 days
+curl "http://localhost:8081/api/v1/spikes/analyze?start=7d&namespace=fundii"
+
+# Custom time range
+curl "http://localhost:8081/api/v1/spikes/analyze?start=2026-04-01T00:00:00Z&end=2026-04-07T23:59:59Z&window=1h"
+```
+
+### How It Works
+
+**Algorithm:**
+1. Fetch historical metrics from Prometheus using range queries
+2. Group metrics by replicaset (removing `-xxxx` suffix)
+3. For each data point in the range:
+   - Calculate moving average from previous points within window size
+   - Compare current value vs moving average
+   - If deviation > threshold → SPIKE
+4. Apply 15-minute cooldown to prevent duplicate spikes
+5. Aggregate results (top replicasets, spikes by type)
+
+**Window Sliding:**
+```
+For each point Pi in range [start to end]:
+  - window = points from (Pi - window_size) to (Pi-1)
+  - avg = sum(previous_points) / count(previous_points)
+  - deviation = (Pi - avg) / avg * 100
+  - if deviation > threshold → SPIKE!
+```
+
+### Severity Classification
+
+| Deviation % | Severity | Color |
+|-------------|----------|-------|
+| 0-50% | normal | green |
+| 50-100% | low | yellow |
+| 100-200% | medium | orange |
+| 200%+ | critical | red |
+
+---
+
 ## Known Issues
 
 - **Port Mismatch**: Frontend proxy in `vite.config.ts` targets port 8080, but backend defaults to 8081. Update vite.config.ts or config.yaml to match.
+- **Large Time Ranges**: Analysis of 30+ days may timeout due to Prometheus query complexity. Consider using smaller ranges.
 
 ---
 

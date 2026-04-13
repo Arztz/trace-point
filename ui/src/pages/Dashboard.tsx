@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { FiRefreshCw, FiDownload, FiActivity, FiAlertTriangle, FiTrendingUp, FiServer, FiCalendar } from 'react-icons/fi';
+import { FiRefreshCw, FiDownload, FiActivity, FiAlertTriangle, FiTrendingUp, FiServer, FiCalendar, FiSearch } from 'react-icons/fi';
 import { TIME_RANGES, TimelineData, TimelineMetric, SpikeListResponse, PodInfo, AvailablePod } from '../types';
 import { api } from '../services/api';
 import TimelineChart from '../components/TimelineChart';
@@ -10,6 +10,7 @@ import TimeRangeSelector from '../components/TimeRangeSelector';
 import SpikeDetail from '../components/SpikeDetail';
 import GravityScoreTable from '../components/GravityScoreTable';
 import PodLegend from '../components/PodLegend';
+import SpikeExplorer from '../pages/SpikeExplorer';
 import { ChartSkeleton, SpikeListSkeleton, FilterBarSkeleton } from '../components/Skeletons';
 import { EmptyState, ErrorState } from '../components/States';
 
@@ -164,7 +165,7 @@ export default function Dashboard() {
   const [highlightedPod, setHighlightedPod] = useState<string | null>(null);
   const [selectedSpikeId, setSelectedSpikeId] = useState<string | null>(null);
   const [showSpikeDetail, setShowSpikeDetail] = useState(false);
-  const [activeTab, setActiveTab] = useState<'timeline' | 'gravity'>('timeline');
+  const [activeTab, setActiveTab] = useState<'timeline' | 'gravity' | 'explorer'>('timeline');
 
   // Store deferred values for API calls (updated after debounce)
   const [debouncedNamespace, setDebouncedNamespace] = useState('');
@@ -279,6 +280,17 @@ export default function Dashboard() {
               >
                 <FiActivity className="w-4 h-4 inline-block mr-2" />
                 Timeline
+              </button>
+              <button
+                onClick={() => setActiveTab('explorer')}
+                className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                  activeTab === 'explorer'
+                    ? 'bg-primary-600 text-white shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                }`}
+              >
+                <FiSearch className="w-4 h-4 inline-block mr-2" />
+                Spike Explorer
               </button>
               <button
                 onClick={() => setActiveTab('gravity')}
@@ -452,6 +464,11 @@ export default function Dashboard() {
               </div>
             </div>
           </div>
+        </div>
+      ) : activeTab === 'explorer' ? (
+        /* Spike Explorer Tab */
+        <div>
+          <SpikeExplorer />
         </div>
       ) : (
         /* Gravity Scores Tab */

@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { SpikeListResponse, TimelineData, ConfigResponse, GravityScoresResponse, SpikeEvent, TimelineResponse } from '../types';
+import type { SpikeListResponse, TimelineData, ConfigResponse, GravityScoresResponse, SpikeEvent, TimelineResponse, SpikeAnalysisResponse } from '../types';
 
 const apiClient = axios.create({
   baseURL: '/api/v1',
@@ -78,6 +78,22 @@ export const api = {
       minScore?: number;
     }): Promise<GravityScoresResponse> => {
       const response = await apiClient.get<GravityScoresResponse>('/gravity-scores', { params });
+      return response.data;
+    },
+  },
+  
+  analyze: {
+    spikes: async (params?: {
+      start?: string;
+      end?: string;
+      window?: string;
+      namespace?: string;
+      replicaset?: string;
+      threshold?: number;
+      limit?: number;
+      offset?: number;
+    }): Promise<SpikeAnalysisResponse> => {
+      const response = await apiClient.get<SpikeAnalysisResponse>('/spikes/analyze', { params });
       return response.data;
     },
   },
