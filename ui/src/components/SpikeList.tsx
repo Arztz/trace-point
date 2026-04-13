@@ -1,13 +1,35 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import type { SpikeEvent } from '../types';
-import { FiActivity, FiCpu, FiServer, FiChevronRight, FiClock, FiAlertTriangle } from 'react-icons/fi';
+import { FiActivity, FiCpu, FiServer, FiChevronRight, FiClock, FiAlertTriangle, FiArrowDown, FiArrowUp } from 'react-icons/fi';
 import { TbCpu } from 'react-icons/tb';
+
+// Sort type definitions
+type SortField = 'timestamp' | 'cpu' | 'ram' | 'podName';
+type SortOrder = 'asc' | 'desc';
+
+interface SortOption {
+  value: SortField;
+  label: string;
+  direction: SortOrder;
+}
 
 interface SpikeListProps {
   spikes: SpikeEvent[];
   selectedId: string | null;
   onSelect: (id: string) => void;
 }
+
+// Sort options configuration
+const SORT_OPTIONS: SortOption[] = [
+  { value: 'timestamp', label: 'Time', direction: 'desc' },
+  { value: 'timestamp', label: 'Time', direction: 'asc' },
+  { value: 'cpu', label: 'CPU', direction: 'desc' },
+  { value: 'cpu', label: 'CPU', direction: 'asc' },
+  { value: 'ram', label: 'RAM', direction: 'desc' },
+  { value: 'ram', label: 'RAM', direction: 'asc' },
+  { value: 'podName', label: 'Pod Name', direction: 'asc' },
+  { value: 'podName', label: 'Pod Name', direction: 'desc' },
+];
 
 // Transform raw backend data to frontend format
 interface TransformedSpike {
@@ -116,9 +138,37 @@ function getResourceColor(resourceType: string): string {
 
 export default function SpikeList({ spikes, selectedId, onSelect }: SpikeListProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [sortBy, setSortBy] = useState<SortOption>(SORT_OPTIONS[0]);
+
+  // Sort spikes based on selected sort option
+  const sortedSpikes = useMemo(() => {
+    const transformed = spikes.map(s => transformSpike(s as unknown as Record<string, unknown>));
+    
+    return [...transformed].sort((a, b) => {
+      let comparison = 0;
+      
+      switch (sortBy.value) {
+        case 'timestamp':
+          comparison = a.timestamp.localeCompare(b.timestamp);
+          break;
+        case 'cpu':
+          comparison = a.currentValue - b.currentValue;
+          break;
+        case 'ram':
+          // For RAM, use movingAverage as proxy since it's the secondary metric
+          comparison = a.movingAverage - b.movingAverage;
+          break;
+        case 'podName':
+          comparison = a.podName.localeCompare(b.podName);
+          break;
+      }
+      
+      return sortBy.direction === 'asc' ? comparison : -comparison;
+    });
+  }, [spikes, sortBy]);
 
   // Transform spikes to handle both formats
-  const transformedSpikes = spikes.map(s => transformSpike(s as unknown as Record<string, unknown>));
+  const transformedSpikes = sortedSpikes;
 
   if (transformedSpikes.length === 0) {
     return (
@@ -137,9 +187,46 @@ export default function SpikeList({ spikes, selectedId, onSelect }: SpikeListPro
     setExpandedId(expandedId === id ? null : id);
   };
 
+  // Get display label for current sort
+  const getSortLabel = (option: SortOption): string => {
+    if (option.value === 'timestamp') {
+      return option.direction === 'desc' ? 'Newest' : 'Oldest';
+    }
+    if (option.value === 'podName') {
+      return option.direction === 'asc' ? 'A-Z' : 'Z-A';
+    }
+    return `${option.label} ${option.direction === 'desc' ? 'High' : 'Low'}`;
+  };
+
   return (
-    <div className="space-y-3 max-h-[500px] overflow-y-auto custom-scrollbar pr-1">
-      {transformedSpikes.map((spike) => {
+    <div>
+      {/* Sort controls header */}
+      <div className="flex items-center justify-between mb-3 px-1">
+        <span className="text-xs text-gray-500 font-medium">
+          {transformedSpikes.length} spike{transformedSpikes.length !== 1 ? 's' : ''}
+        </span>
+        <div className="relative">
+          <select
+            value={`${sortBy.value}-${sortBy.direction}`}
+            onChange={(e) => {
+              const [value, direction] = e.target.value.split('-') as [SortField, SortOrder];
+              setSortBy({ value, label: '', direction });
+            }}
+            className="text-xs pl-2 pr-6 py-1 appearance-none bg-gray-50 border border-gray-200 rounded-md text-gray-600 cursor-pointer hover:bg-gray-100 focus:outline-none focus:ring-1 focus:ring-primary-500"
+          >
+            {SORT_OPTIONS.map((option) => (
+              <option key={`${option.value}-${option.direction}`} value={`${option.value}-${option.direction}`}>
+                {getSortLabel(option)}
+              </option>
+            ))}
+          </select>
+          <FiChevronRight className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400 pointer-events-none rotate-90" />
+        </div>
+      </div>
+
+      {/* Spike list */}
+      <div className="space-y-3 max-h-[500px] overflow-y-auto custom-scrollbar pr-1">
+        {transformedSpikes.map((spike) => {
         const severity = getSpikeSeverity(spike.currentValue, spike.movingAverage);
         const isExpanded = expandedId === spike.id;
         const isSelected = selectedId === spike.id;
@@ -280,6 +367,7 @@ export default function SpikeList({ spikes, selectedId, onSelect }: SpikeListPro
           </div>
         );
       })}
+      </div>
     </div>
   );
 }

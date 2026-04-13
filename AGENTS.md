@@ -49,6 +49,34 @@ cd ui && npm run build
 golangci-lint run
 ```
 
+## Environment Variables (Optional)
+
+### Backend
+Configure in `configs/config.yaml`:
+```yaml
+app:
+  port: 8081  # Change backend port here
+```
+
+### Frontend
+Set environment variables before running:
+```bash
+# Custom frontend port (default: 3000)
+FRONTEND_PORT=3000 npm run dev
+
+# Custom backend URL (default: http://localhost:8081)
+BACKEND_URL=http://localhost:8081 npm run dev
+
+# Both together
+FRONTEND_PORT=3000 BACKEND_URL=http://localhost:8081 npm run dev
+```
+
+Or create `ui/.env.local`:
+```
+FRONTEND_PORT=3000
+BACKEND_URL=http://localhost:8081
+```
+
 ## API Endpoints
 
 | Endpoint | Description |

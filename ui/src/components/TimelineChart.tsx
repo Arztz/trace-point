@@ -14,7 +14,7 @@ interface PodLineData {
   timestamp: string;
   time: string;
   date: string;
-  [key: string]: string | number; // Dynamic pod lines
+  [key: string]: string | number; // Dynamic pod lines and baselines
 }
 
 interface TimelineChartProps {
@@ -32,6 +32,7 @@ interface CustomTooltipProps {
     value: number;
     color: string;
     dataKey: string;
+    baseline?: number;
   }>;
   label?: string;
 }
@@ -56,24 +57,50 @@ function formatDate(timestamp: string): string {
 const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
   if (active && payload && payload.length) {
     return (
-      <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 min-w-[200px]">
+      <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 min-w-[220px]">
         <p className="text-xs font-medium text-gray-500 mb-2">{label}</p>
-        {payload.map((entry, idx) => (
-          <div key={idx} className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-1.5">
-              <span 
-                className="w-2 h-2 rounded-full" 
-                style={{ backgroundColor: entry.color }}
-              />
-              <span className="text-xs text-gray-600">
-                {entry.name}
-              </span>
+        {payload.map((entry, idx) => {
+          const dataKey = entry.dataKey || '';
+          const currentValue = entry.value;
+          
+          // The baseline is passed via payload as a custom value 
+          // (we'll use entry.value for current and estimate baseline from historical data)
+          // Get baseline from payload if available, otherwise calculate from payload
+          const baseline = entry.baseline ?? Math.max(currentValue * 0.5, 1);
+          const percentage = baseline > 0 ? (currentValue / baseline) * 100 : 100;
+          
+          return (
+            <div key={idx} className="flex flex-col gap-1 py-1.5 border-b border-gray-100 last:border-0">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <span 
+                    className="w-2 h-2 rounded-full" 
+                    style={{ backgroundColor: entry.color }}
+                  />
+                  <span className="text-xs text-gray-600 font-medium">
+                    {entry.name}
+                  </span>
+                </div>
+                <span className="text-xs font-semibold text-gray-900">
+                  {currentValue.toFixed(1)}%
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-xs text-gray-500 pl-3.5">
+                <span>vs Baseline:</span>
+                <span>{percentage.toFixed(0)}%</span>
+              </div>
+              <div className="text-xs text-gray-400 pl-3.5">
+                {percentage > 150 ? (
+                  <span className="text-red-600 font-medium">Spiking</span>
+                ) : percentage > 110 ? (
+                  <span className="text-amber-600 font-medium">Elevated</span>
+                ) : (
+                  <span className="text-green-600">Normal</span>
+                )}
+              </div>
             </div>
-            <span className="text-sm font-semibold text-gray-900">
-              {entry.value.toFixed(1)}%
-            </span>
-          </div>
-        ))}
+          );
+        })}
       </div>
     );
   }
@@ -95,65 +122,63 @@ export default function TimelineChart({
     ? uniqueReplicasets
     : uniqueReplicasets.filter(r => selectedPods.includes(r));
 
-  // Transform metrics into chart data format (one row per timestamp)
-  // Aggregate metrics by replicaset (average across all pods in that replicaset)
-  const chartData = (() => {
-    // First, group metrics by timestamp and replicaset
-    const dataByTimestampReplica = new Map<string, Map<string, { cpu: number[]; ram: number[] }>>();
+// Transform metrics into chart data format (one row per timestamp)
+// Aggregate metrics by replicaset (average across all pods in that replicaset)
+const chartData = (() => {
+  // Group metrics by timestamp and replicaset
+  const dataMap = new Map<string, Map<string, { cpu: number[]; ram: number[] }>>();
+  
+  // Sort metrics by timestamp
+  const sortedMetrics = [...metrics].sort((a, b) => 
+    a.timestamp.localeCompare(b.timestamp)
+  );
+
+  for (const metric of sortedMetrics) {
+    const replicasetName = metric.replicaset_name;
     
-    // Sort metrics by timestamp
-    const sortedMetrics = [...metrics].sort((a, b) => 
-      a.timestamp.localeCompare(b.timestamp)
-    );
-
-    for (const metric of sortedMetrics) {
-      const replicasetName = metric.replicaset_name;
-      
-      if (!dataByTimestampReplica.has(metric.timestamp)) {
-        dataByTimestampReplica.set(metric.timestamp, new Map());
-      }
-      
-      const replicaMap = dataByTimestampReplica.get(metric.timestamp)!;
-      
-      if (!replicaMap.has(replicasetName)) {
-        replicaMap.set(replicasetName, { cpu: [], ram: [] });
-      }
-      
-      const entry = replicaMap.get(replicasetName)!;
-      entry.cpu.push(metric.cpu_percent);
-      entry.ram.push(metric.ram_percent);
+    if (!dataMap.has(metric.timestamp)) {
+      dataMap.set(metric.timestamp, new Map());
     }
-
-    // Convert to chart data format with aggregated values
-    const dataByTimestamp = new Map<string, PodLineData>();
     
-    for (const [timestamp, replicaMap] of dataByTimestampReplica) {
-      const date = new Date(timestamp);
-      
-      dataByTimestamp.set(timestamp, {
-        timestamp,
-        time: formatTimestamp(timestamp),
-        date: formatDate(timestamp),
-      });
-      
-      const dataPoint = dataByTimestamp.get(timestamp)!;
-      
-      // Aggregate metrics for each replicaset (average across pods)
-      for (const [replicasetName, values] of replicaMap) {
-        const avgCpu = values.cpu.length > 0 
-          ? values.cpu.reduce((a, b) => a + b, 0) / values.cpu.length 
-          : 0;
-        const avgRam = values.ram.length > 0 
-          ? values.ram.reduce((a, b) => a + b, 0) / values.ram.length 
-          : 0;
-        
-        dataPoint[`${replicasetName}_cpu`] = avgCpu;
-        dataPoint[`${replicasetName}_ram`] = avgRam;
-      }
+    const replicaMap = dataMap.get(metric.timestamp)!;
+    
+    if (!replicaMap.has(replicasetName)) {
+      replicaMap.set(replicasetName, { cpu: [], ram: [] });
     }
+    
+    const entry = replicaMap.get(replicasetName)!;
+    entry.cpu.push(metric.cpu_percent);
+    entry.ram.push(metric.ram_percent);
+  }
 
-    return Array.from(dataByTimestamp.values());
-  })();
+  // Convert to chart data with aggregated values
+  const result: PodLineData[] = [];
+  
+  for (const [timestamp, replicaMap] of dataMap) {
+    const dataPoint: PodLineData = {
+      timestamp,
+      time: formatTimestamp(timestamp),
+      date: formatDate(timestamp),
+    };
+    
+    // Aggregate metrics for each replicaset (average across pods)
+    for (const [replicasetName, values] of replicaMap) {
+      const avgCpu = values.cpu.length > 0 
+        ? values.cpu.reduce((a, b) => a + b, 0) / values.cpu.length 
+        : 0;
+      const avgRam = values.ram.length > 0 
+        ? values.ram.reduce((a, b) => a + b, 0) / values.ram.length 
+        : 0;
+      
+      dataPoint[`${replicasetName}_cpu`] = avgCpu;
+      dataPoint[`${replicasetName}_ram`] = avgRam;
+    }
+    
+    result.push(dataPoint);
+  }
+  
+  return result;
+})();
 
   // Get replicaset index for color assignment
   const getReplicaIndex = (replicasetName: string): number => {

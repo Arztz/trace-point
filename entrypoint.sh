@@ -8,8 +8,8 @@
 set -e
 
 # Configuration
-BACKEND_PORT="${BACKEND_PORT:-8081}"
-FRONTEND_PORT="${FRONTEND_PORT:-3000}"
+BACKEND_PORT="${BACKEND_PORT:-8088}"
+FRONTEND_PORT="${FRONTEND_PORT:-3088}"
 BACKEND_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRONTEND_DIR="$BACKEND_DIR/ui"
 
@@ -43,8 +43,8 @@ while [[ $# -gt 0 ]]; do
             echo "  -h, --help       Show this help message"
             echo ""
             echo "Environment variables:"
-            echo "  BACKEND_PORT      Backend port (default: 8081)"
-            echo "  FRONTEND_PORT     Frontend port (default: 3000)"
+            echo "  BACKEND_PORT      Backend port (default: 8088)"
+            echo "  FRONTEND_PORT     Frontend port (default: 3088)"
             exit 0
             ;;
         *)
@@ -98,8 +98,12 @@ start_frontend() {
         npm install
     fi
     
+    # Export environment variables for Vite
+    export FRONTEND_PORT
+    export BACKEND_URL="http://localhost:$BACKEND_PORT"
+    
     # Start frontend in background
-    npm run dev &
+    FRONTEND_PORT=$FRONTEND_PORT BACKEND_URL=http://localhost:$BACKEND_PORT npm run dev &
     FRONTEND_PID=$!
     
     echo -e "${GREEN}[Frontend]${NC} Started (PID: $FRONTEND_PID) on port $FRONTEND_PORT"

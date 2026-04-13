@@ -60,26 +60,29 @@ func extractValueFromResult(value interface{}) float64 {
 	}
 
 	// Handle []interface{} format (instant query result: [timestamp, value])
+	// NOTE: Query already returns percentage (includes * 100 in PromQL), no additional multiplication needed
 	if vals, ok := value.([]interface{}); ok && len(vals) >= 2 {
 		switch v := vals[1].(type) {
 		case float64:
-			return v * 100 // Convert to percentage
+			return v // Already includes * 100 from Prometheus query
 		case string:
 			if parsed, err := strconv.ParseFloat(v, 64); err == nil {
-				return parsed * 100
+				return parsed
 			}
 		}
 	}
 
 	// Handle direct float64
+	// NOTE: Query already returns percentage (includes * 100 in PromQL), no additional multiplication needed
 	if val, ok := value.(float64); ok {
-		return val * 100
+		return val
 	}
 
 	// Handle string
+	// NOTE: Query already returns percentage (includes * 100 in PromQL), no additional multiplication needed
 	if val, ok := value.(string); ok {
 		if parsed, err := strconv.ParseFloat(val, 64); err == nil {
-			return parsed * 100
+			return parsed
 		}
 	}
 
@@ -356,13 +359,14 @@ func (c *Client) GetHistoricalMetrics(ctx context.Context, podName, namespace, c
 
 	for _, r := range cpuResults {
 		// Handle range query result ([][]interface{})
+		// NOTE: Query already returns percentage (includes * 100 in PromQL), no additional multiplication needed
 		if values, ok := r.Value.([][]interface{}); ok {
 			for i := range values {
 				if len(values[i]) >= 2 {
 					point := values[i]
 					if ts, ok := point[0].(float64); ok {
 						if val, ok := point[1].(float64); ok {
-							cpuMap[ts] = val * 100
+							cpuMap[ts] = val // Already includes * 100 from Prometheus query
 						}
 					}
 				}
@@ -372,13 +376,14 @@ func (c *Client) GetHistoricalMetrics(ctx context.Context, podName, namespace, c
 
 	for _, r := range ramResults {
 		// Handle range query result ([][]interface{})
+		// NOTE: Query already returns percentage (includes * 100 in PromQL), no additional multiplication needed
 		if values, ok := r.Value.([][]interface{}); ok {
 			for i := range values {
 				if len(values[i]) >= 2 {
 					point := values[i]
 					if ts, ok := point[0].(float64); ok {
 						if val, ok := point[1].(float64); ok {
-							ramMap[ts] = val * 100
+							ramMap[ts] = val // Already includes * 100 from Prometheus query
 						}
 					}
 				}
