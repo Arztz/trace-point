@@ -35,8 +35,11 @@ func BuildCPUUtilizationQuery(namespaces []string, excludePatterns []string) str
 
 	// Base query: CPU usage / CPU request as percentage
 	// Using kube_pod_container_resource_requests for CPU request instead of container_spec_cpu_quota
+	// Fix: Use subquery to ensure proper 1:1 matching between usage and request
+	// This prevents issues when Prometheus returns multiple container entries per pod
 	query := fmt.Sprintf(
-		`sum(rate(container_cpu_usage_seconds_total{%s}[5m])) by (pod, namespace, container) / sum(kube_pod_container_resource_requests{%s, resource="cpu"}) by (pod, namespace, container) * 100`,
+		`(sum by (pod, namespace, container) (rate(container_cpu_usage_seconds_total{%s}[5m])) / 
+		  sum by (pod, namespace, container) (kube_pod_container_resource_requests{%s, resource="cpu"})) * 100`,
 		selector, selector,
 	)
 
@@ -73,8 +76,10 @@ func BuildRAMUtilizationQuery(namespaces []string, excludePatterns []string) str
 	// Using kube_pod_container_resource_requests for memory request instead of container_spec_memory_limit
 	// Note: kube_pod_container_resource_requests is a gauge metric (requested amount at point in time),
 	// NOT a counter, so rate() should NOT be applied to it (unlike container_memory_working_set_bytes which is a gauge but works with rate())
+	// Fix: Use subquery to ensure proper 1:1 matching between usage and request
 	query := fmt.Sprintf(
-		`sum(rate(container_memory_working_set_bytes{%s}[5m])) by (pod, namespace, container) / sum(kube_pod_container_resource_requests{%s, resource="memory"}) by (pod, namespace, container) * 100`,
+		`(sum by (pod, namespace, container) (rate(container_memory_working_set_bytes{%s}[5m])) / 
+		  sum by (pod, namespace, container) (kube_pod_container_resource_requests{%s, resource="memory"})) * 100`,
 		selector, selector,
 	)
 
@@ -85,7 +90,8 @@ func BuildRAMUtilizationQuery(namespaces []string, excludePatterns []string) str
 func BuildContainerCPUQuery(podName, namespace, containerName string) string {
 	selector := fmt.Sprintf(`pod="%s", namespace="%s", container="%s"`, podName, namespace, containerName)
 	return fmt.Sprintf(
-		`sum(rate(container_cpu_usage_seconds_total{%s}[5m])) by (pod, namespace, container) / sum(kube_pod_container_resource_requests{%s, resource="cpu"}) by (pod, namespace, container) * 100`,
+		`(sum by (pod, namespace, container) (rate(container_cpu_usage_seconds_total{%s}[5m])) / 
+		  sum by (pod, namespace, container) (kube_pod_container_resource_requests{%s, resource="cpu"})) * 100`,
 		selector, selector,
 	)
 }
@@ -94,7 +100,8 @@ func BuildContainerCPUQuery(podName, namespace, containerName string) string {
 func BuildContainerRAMQuery(podName, namespace, containerName string) string {
 	selector := fmt.Sprintf(`pod="%s", namespace="%s", container="%s"`, podName, namespace, containerName)
 	return fmt.Sprintf(
-		`sum(rate(container_memory_working_set_bytes{%s}[5m])) by (pod, namespace, container) / sum(kube_pod_container_resource_requests{%s, resource="memory"}) by (pod, namespace, container) * 100`,
+		`(sum by (pod, namespace, container) (rate(container_memory_working_set_bytes{%s}[5m])) / 
+		  sum by (pod, namespace, container) (kube_pod_container_resource_requests{%s, resource="memory"})) * 100`,
 		selector, selector,
 	)
 }
@@ -103,7 +110,8 @@ func BuildContainerRAMQuery(podName, namespace, containerName string) string {
 func BuildPodCPUQuery(podName, namespace string) string {
 	selector := fmt.Sprintf(`pod="%s", namespace="%s"`, podName, namespace)
 	return fmt.Sprintf(
-		`sum(rate(container_cpu_usage_seconds_total{%s}[5m])) by (pod, namespace, container) / sum(kube_pod_container_resource_requests{%s, resource="cpu"}) by (pod, namespace, container) * 100`,
+		`(sum by (pod, namespace, container) (rate(container_cpu_usage_seconds_total{%s}[5m])) / 
+		  sum by (pod, namespace, container) (kube_pod_container_resource_requests{%s, resource="cpu"})) * 100`,
 		selector, selector,
 	)
 }
@@ -112,7 +120,8 @@ func BuildPodCPUQuery(podName, namespace string) string {
 func BuildPodRAMQuery(podName, namespace string) string {
 	selector := fmt.Sprintf(`pod="%s", namespace="%s"`, podName, namespace)
 	return fmt.Sprintf(
-		`sum(container_memory_working_set_bytes{%s}) by (pod, namespace, container) / sum(kube_pod_container_resource_requests{%s, resource="memory"}) by (pod, namespace, container) * 100`,
+		`(sum by (pod, namespace, container) (container_memory_working_set_bytes{%s}) / 
+		  sum by (pod, namespace, container) (kube_pod_container_resource_requests{%s, resource="memory"})) * 100`,
 		selector, selector,
 	)
 }
@@ -121,7 +130,8 @@ func BuildPodRAMQuery(podName, namespace string) string {
 func BuildNamespaceCPUQuery(namespace string) string {
 	selector := fmt.Sprintf(`namespace="%s"`, namespace)
 	return fmt.Sprintf(
-		`sum(rate(container_cpu_usage_seconds_total{%s}[5m])) by (pod, namespace, container) / sum(kube_pod_container_resource_requests{%s, resource="cpu"}) by (pod, namespace, container) * 100`,
+		`(sum by (pod, namespace, container) (rate(container_cpu_usage_seconds_total{%s}[5m])) / 
+		  sum by (pod, namespace, container) (kube_pod_container_resource_requests{%s, resource="cpu"})) * 100`,
 		selector, selector,
 	)
 }
@@ -130,7 +140,8 @@ func BuildNamespaceCPUQuery(namespace string) string {
 func BuildNamespaceRAMQuery(namespace string) string {
 	selector := fmt.Sprintf(`namespace="%s"`, namespace)
 	return fmt.Sprintf(
-		`sum(container_memory_working_set_bytes{%s}) by (pod, namespace, container) / sum(kube_pod_container_resource_requests{%s, resource="memory"}) by (pod, namespace, container) * 100`,
+		`(sum by (pod, namespace, container) (container_memory_working_set_bytes{%s}) / 
+		  sum by (pod, namespace, container) (kube_pod_container_resource_requests{%s, resource="memory"})) * 100`,
 		selector, selector,
 	)
 }

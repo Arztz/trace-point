@@ -282,9 +282,10 @@ func (c *Client) FetchContainerMetrics(ctx context.Context, namespaces []string,
 
 		var cpuPercent float64
 		// Handle both instant ([]interface{}) and range ([][]interface{}) formats
+		// Note: Query already returns percentage (includes * 100), so no additional multiplication
 		if vals, ok := r.Value.([]interface{}); ok && len(vals) >= 2 {
 			if val, ok := vals[1].(float64); ok {
-				cpuPercent = val * 100 // Convert to percentage
+				cpuPercent = val // Already includes * 100 from Prometheus query
 			}
 		}
 
@@ -306,9 +307,10 @@ func (c *Client) FetchContainerMetrics(ctx context.Context, namespaces []string,
 
 		var ramPercent float64
 		// Handle both instant ([]interface{}) and range ([][]interface{}) formats
+		// Note: Query already returns percentage (includes * 100), so no additional multiplication
 		if vals, ok := r.Value.([]interface{}); ok && len(vals) >= 2 {
 			if val, ok := vals[1].(float64); ok {
-				ramPercent = val * 100 // Convert to percentage
+				ramPercent = val // Already includes * 100 from Prometheus query
 			}
 		}
 
@@ -523,13 +525,13 @@ func (c *Client) QueryTimelineMetrics(ctx context.Context, namespaces []string, 
 			var cpuPercent float64
 			switch v := point[1].(type) {
 			case float64:
-				cpuPercent = v * 100 // Convert to percentage
+				cpuPercent = v // Already includes * 100 from Prometheus query
 			case string:
 				parsed, err := strconv.ParseFloat(v, 64)
 				if err != nil {
 					continue
 				}
-				cpuPercent = parsed * 100
+				cpuPercent = parsed
 			default:
 				continue
 			}
@@ -586,13 +588,13 @@ func (c *Client) QueryTimelineMetrics(ctx context.Context, namespaces []string, 
 			var ramPercent float64
 			switch v := point[1].(type) {
 			case float64:
-				ramPercent = v * 100
+				ramPercent = v // Already includes * 100 from Prometheus query
 			case string:
 				parsed, err := strconv.ParseFloat(v, 64)
 				if err != nil {
 					continue
 				}
-				ramPercent = parsed * 100
+				ramPercent = parsed
 			default:
 				continue
 			}

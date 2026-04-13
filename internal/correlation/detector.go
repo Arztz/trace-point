@@ -28,7 +28,7 @@ func DefaultDetectorConfig() *DetectorConfig {
 		PollingIntervalSeconds:      30,
 		ThresholdPercent:            50.0,
 		MovingAverageWindowMinutes:  30,
-		BaselineLearningMinutes:     30,
+		BaselineLearningMinutes:     5, // Reduced for faster spike detection (was 30)
 		ReconciliationBufferMinutes: 8,
 		CooldownMinutes:             15,
 	}
@@ -370,6 +370,15 @@ type SpikeAlert struct {
 func (s *SpikeAlert) ToStorageModel() *storage.SpikeEvent {
 	// Generate unique ID using namespace-pod-timestamp to avoid duplicate key errors
 	uniqueID := fmt.Sprintf("%s-%s-%d", s.Namespace, s.PodName, s.Timestamp.Unix())
+
+	// Use the moving average that corresponds to the spike type
+	var movingAvg float64
+	if s.Type == RAM {
+		movingAvg = s.MovingAverageRAM
+	} else {
+		movingAvg = s.MovingAverageCPU
+	}
+
 	return &storage.SpikeEvent{
 		ID:                   uniqueID,
 		Timestamp:            s.Timestamp,
@@ -378,7 +387,7 @@ func (s *SpikeAlert) ToStorageModel() *storage.SpikeEvent {
 		CPUUsagePercent:      s.CPUPercent,
 		RAMUsagePercent:      s.RAMPercent,
 		ThresholdPercent:     s.ThresholdPercent,
-		MovingAveragePercent: s.MovingAverageCPU,
+		MovingAveragePercent: movingAvg,
 		CooldownEnd:          &s.AlertTime,
 		CreatedAt:            time.Now(),
 	}

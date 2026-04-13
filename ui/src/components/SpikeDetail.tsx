@@ -60,7 +60,10 @@ export default function SpikeDetail({ spikeId, onClose }: SpikeDetailProps) {
     );
   }
 
-  const spikeRatio = ((spike.currentValue / spike.movingAverage) * 100 - 100).toFixed(1);
+  // Calculate % above average - guard against very small moving averages
+  const spikeRatio = spike.movingAverage > 1 
+    ? Math.min((spike.currentValue / spike.movingAverage) * 100 - 100, 9999).toFixed(1)
+    : '0.0';
 
   return (
     <div className="bg-white rounded-lg shadow-lg border border-gray-200 overflow-hidden animate-slide-up">

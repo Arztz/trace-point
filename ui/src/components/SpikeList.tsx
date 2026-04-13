@@ -143,9 +143,12 @@ export default function SpikeList({ spikes, selectedId, onSelect }: SpikeListPro
         const severity = getSpikeSeverity(spike.currentValue, spike.movingAverage);
         const isExpanded = expandedId === spike.id;
         const isSelected = selectedId === spike.id;
-        const spikeRatio = spike.movingAverage > 0 
-          ? ((spike.currentValue / spike.movingAverage) * 100 - 100).toFixed(0)
-          : '0';
+        // Calculate % above average - guard against very small moving averages to prevent unrealistically high ratios
+        let spikeRatio = '0';
+        if (spike.movingAverage > 1) {  // Only calculate if moving average is > 1% (reasonable baseline)
+          const ratio = (spike.currentValue / spike.movingAverage) * 100 - 100;
+          spikeRatio = Math.min(ratio, 9999).toFixed(0);  // Cap at 9999% to prevent display overflow
+        }
 
         return (
           <div
