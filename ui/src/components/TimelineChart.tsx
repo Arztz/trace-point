@@ -266,15 +266,17 @@ export default function TimelineChart({
   }, [summary, metrics]);
 
    const classifyDeployment = useCallback((avgCpu: number, maxCpu: number) => {
-     const above100 = maxCpu > over100Threshold;
-     if (avgCpu >= closeTo100Threshold && above100) {
-       return 'needs_more_cpu';
-     }
-     if (avgCpu <= farBelow100Threshold && !above100) {
-       return 'overprovisioned';
-     }
-     return 'balanced';
-   }, [closeTo100Threshold, farBelow100Threshold, over100Threshold]);
+      const above100 = maxCpu > over100Threshold;
+      // "needs_more_cpu" if avg is close to 100% OR if max exceeds 100%
+      // This catches cases where avg is 50% but max spikes to 150%
+      if (avgCpu >= closeTo100Threshold || above100) {
+        return 'needs_more_cpu';
+      }
+      if (avgCpu <= farBelow100Threshold && !above100) {
+        return 'overprovisioned';
+      }
+      return 'balanced';
+    }, [closeTo100Threshold, farBelow100Threshold, over100Threshold]);
 
    const needsMoreCpu = useMemo(() => (
      normalizedSummary

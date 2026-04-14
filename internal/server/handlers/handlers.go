@@ -472,7 +472,9 @@ func buildTimelineSummary(metrics []prometheus.TimelineMetric, cfg config.Timeli
 		avgCPU := acc.sumCPU / float64(acc.count)
 		above100 := acc.maxCPU > cfg.CPUOver100Threshold
 		classification := "balanced"
-		if avgCPU >= cfg.CPUCloseTo100Threshold && acc.maxCPU > cfg.CPUOver100Threshold {
+		// "needs_more_cpu" if avg is close to 100% OR if max exceeds 100%
+		// This catches cases where avg is 50% but max spikes to 150%
+		if avgCPU >= cfg.CPUCloseTo100Threshold || acc.maxCPU > cfg.CPUOver100Threshold {
 			classification = "needs_more_cpu"
 		} else if avgCPU <= cfg.CPUFarBelow100Threshold && acc.maxCPU <= cfg.CPUOver100Threshold {
 			classification = "overprovisioned"
