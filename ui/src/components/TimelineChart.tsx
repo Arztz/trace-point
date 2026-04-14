@@ -38,6 +38,7 @@ interface CustomTooltipProps {
     baseline?: number;
   }>;
   label?: string;
+  highlightedPod?: string | null;
 }
 
 interface DeploymentSummary {
@@ -64,57 +65,71 @@ function formatDate(timestamp: string): string {
   });
 }
 
-const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
-  if (active && payload && payload.length) {
-    return (
-      <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 min-w-[220px]">
-        <p className="text-xs font-medium text-gray-500 mb-2">{label}</p>
-        {payload.map((entry, idx) => {
-          const dataKey = entry.dataKey || '';
-          const currentValue = entry.value;
-          
-          // The baseline is passed via payload as a custom value 
-          // (we'll use entry.value for current and estimate baseline from historical data)
-          // Get baseline from payload if available, otherwise calculate from payload
-          const baseline = entry.baseline ?? Math.max(currentValue * 0.5, 1);
-          const percentage = baseline > 0 ? (currentValue / baseline) * 100 : 100;
-          
-          return (
-            <div key={idx} className="flex flex-col gap-1 py-1.5 border-b border-gray-100 last:border-0">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  <span 
-                    className="w-2 h-2 rounded-full" 
-                    style={{ backgroundColor: entry.color }}
-                  />
-                  <span className="text-xs text-gray-600 font-medium">
-                    {entry.name}
-                  </span>
-                </div>
-                <span className="text-xs font-semibold text-gray-900">
-                  {currentValue.toFixed(1)}%
+const CustomTooltip = ({ active, payload, label, highlightedPod }: CustomTooltipProps) => {
+  // Don't show placeholder - only show when actually hovering with data
+  if (!active || !payload || payload.length === 0) {
+    return null;
+  }
+  
+  // Filter payload to only show highlighted pod when one is selected
+  // Backend provides clean names (e.g., "portfolio-service"), so no need to strip suffixes
+  const filteredPayload = highlightedPod 
+    ? payload.filter(entry => {
+        const dataKey = String(entry.dataKey || '').replace('_cpu', '');
+        const name = String(entry.name || '').replace(' (CPU)', '');
+        // Exact match or contains match - both directions
+        return name === highlightedPod || dataKey === highlightedPod ||
+               name.includes(highlightedPod) || highlightedPod.includes(name) ||
+               dataKey.includes(highlightedPod) || highlightedPod.includes(dataKey);
+      })
+    : payload;
+  
+  // If highlighted but no matching pod found, show all (don't hide)
+  const displayPayload = highlightedPod && filteredPayload.length === 0 ? payload : filteredPayload;
+  
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 min-w-[220px]" style={{ visibility: 'visible', opacity: 1 }}>
+      <p className="text-xs font-medium text-gray-500 mb-2">{label}</p>
+      {displayPayload.map((entry, idx) => {
+        const dataKey = entry.dataKey || '';
+        const currentValue = entry.value;
+        const baseline = entry.baseline ?? Math.max(currentValue * 0.5, 1);
+        const percentage = baseline > 0 ? (currentValue / baseline) * 100 : 100;
+        
+        return (
+          <div key={idx} className="flex flex-col gap-1 py-1.5 border-b border-gray-100 last:border-0">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <span 
+                  className="w-2 h-2 rounded-full" 
+                  style={{ backgroundColor: entry.color }}
+                />
+                <span className="text-xs text-gray-600 font-medium">
+                  {entry.name}
                 </span>
               </div>
-              <div className="flex items-center justify-between text-xs text-gray-500 pl-3.5">
-                <span>vs Baseline:</span>
-                <span>{percentage.toFixed(0)}%</span>
-              </div>
-              <div className="text-xs text-gray-400 pl-3.5">
-                {percentage > 150 ? (
-                  <span className="text-red-600 font-medium">Spiking</span>
-                ) : percentage > 110 ? (
-                  <span className="text-amber-600 font-medium">Elevated</span>
-                ) : (
-                  <span className="text-green-600">Normal</span>
-                )}
-              </div>
+              <span className="text-xs font-semibold text-gray-900">
+                {currentValue.toFixed(1)}%
+              </span>
             </div>
-          );
-        })}
-      </div>
-    );
-  }
-  return null;
+            <div className="flex items-center justify-between text-xs text-gray-500 pl-3.5">
+              <span>vs Baseline:</span>
+              <span>{percentage.toFixed(0)}%</span>
+            </div>
+            <div className="text-xs text-gray-400 pl-3.5">
+              {percentage > 150 ? (
+                <span className="text-red-600 font-medium">Spiking</span>
+              ) : percentage > 110 ? (
+                <span className="text-amber-600 font-medium">Elevated</span>
+              ) : (
+                <span className="text-green-600">Normal</span>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 };
 
 export default function TimelineChart({
@@ -128,15 +143,15 @@ export default function TimelineChart({
   const [closeTo100Threshold, setCloseTo100Threshold] = useState(85);
   const [farBelow100Threshold, setFarBelow100Threshold] = useState(50);
   const [over100Threshold, setOver100Threshold] = useState(100);
-  // Get unique replicasets from metrics (group by replicaset_name, not individual pod)
-  const uniqueReplicasets = Array.from(new Set(metrics.map(m => m.replicaset_name)));
+  // Get unique pods from metrics (use pod_name, not replicaset_name)
+  const uniquePods = Array.from(new Set(metrics.map(m => m.pod_name)));
   
-  // Determine which replicasets to display
-  const displayReplicasets = useMemo(() => 
+  // Determine which pods to display
+  const displayPods = useMemo(() => 
     selectedPods.length === 0
-      ? uniqueReplicasets
-      : uniqueReplicasets.filter(r => selectedPods.includes(r)),
-    [uniqueReplicasets, selectedPods]
+      ? uniquePods
+      : uniquePods.filter(r => selectedPods.includes(r)),
+    [uniquePods, selectedPods]
   );
 
   // Transform metrics into chart data format (one row per timestamp)
@@ -198,7 +213,7 @@ export default function TimelineChart({
     if (pod) {
       return availablePods.indexOf(pod);
     }
-    return uniqueReplicasets.indexOf(replicasetName);
+    return uniquePods.indexOf(replicasetName);
   };
 
   // Use consistent color based on pod name hash (always use hash, ignore index to prevent order-based colors)
@@ -275,7 +290,7 @@ export default function TimelineChart({
 
   // Calculate stats for selected replicasets or all replicasets
   const stats = useMemo(() => {
-    const targetReplicasets = displayReplicasets;
+    const targetReplicasets = displayPods;
     if (targetReplicasets.length === 0 || chartData.length === 0) {
       return { avgCpu: 0, maxCpu: 0 };
     }
@@ -300,7 +315,7 @@ export default function TimelineChart({
       avgCpu: cpuCount > 0 ? totalCpu / cpuCount : 0,
       maxCpu,
     };
-  }, [chartData, displayReplicasets]);
+  }, [chartData, displayPods]);
 
   // Handle line click - toggle highlight behavior - simplified
   const handleLineClick = useCallback((replicasetName: string) => {
@@ -346,7 +361,7 @@ export default function TimelineChart({
   const renderLines = () => {
     const lines: JSX.Element[] = [];
 
-    for (const replicasetName of displayReplicasets) {
+    for (const replicasetName of displayPods) {
       const isHighlighted = highlightedPod === replicasetName;
       const isFaded = Boolean(highlightedPod && !isHighlighted);
       const color = getPodColorForReplica(replicasetName);
@@ -469,7 +484,7 @@ export default function TimelineChart({
 
       {/* Legend info */}
       <div className="text-sm text-gray-500 flex flex-wrap items-center gap-4">
-        <span>Showing {displayReplicasets.length} replicaset{displayReplicasets.length !== 1 ? 's' : ''}</span>
+        <span>Showing {displayPods.length} replicaset{displayPods.length !== 1 ? 's' : ''}</span>
         {highlightedPod && (
           <span
             className="text-primary-600 font-medium break-words whitespace-normal"
@@ -507,7 +522,12 @@ export default function TimelineChart({
               tickFormatter={(value) => `${value}%`}
               domain={[0, 'auto']}
             />
-            <Tooltip content={<CustomTooltip />} />
+            <Tooltip 
+              content={<CustomTooltip highlightedPod={highlightedPod} />} 
+              isAnimationActive={false}
+              wrapperStyle={{ visibility: 'visible', opacity: 1, zIndex: 9999, position: 'relative' }}
+              position={{ x: 0, y: 0 }}
+            />
             {/* Legend hidden per user request - removed to declutter chart */}
             {renderLines()}
           </LineChart>

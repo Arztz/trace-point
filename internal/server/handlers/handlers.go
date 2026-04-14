@@ -287,13 +287,13 @@ func (h *Handler) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	case "24h":
 		startTimeArg = now.AddDate(0, 0, -1)
 	case "7d":
-		startTimeArg = now.AddDate(-7, 0, 0)
+		startTimeArg = now.AddDate(0, 0, -7) // 7 days ago
 	default:
 		// Default to 24h
 		startTimeArg = now.AddDate(0, 0, -1)
 	}
 
-	// Parse step parameter (default: 30s)
+	// Parse step parameter (default: dynamic based on time range)
 	stepStr := r.URL.Query().Get("step")
 	step := 30 * time.Second
 	if stepStr != "" {
@@ -301,6 +301,21 @@ func (h *Handler) handleTimeline(w http.ResponseWriter, r *http.Request) {
 		if parsed, err := time.ParseDuration(stepStr); err == nil {
 			step = parsed
 		}
+	} else {
+		// Calculate dynamic step based on time range to avoid too many data points
+		// For large time ranges, use larger steps to prevent Prometheus timeouts/errors
+		timeRangeHours := now.Sub(startTimeArg).Hours()
+		if timeRangeHours > 24*4 {
+			// 7d: 5 minute step (2016 points)
+			step = 5 * time.Minute
+		} else if timeRangeHours > 24*2 {
+			// 3d: 2 minute step (2160 points)
+			step = 2 * time.Minute
+		} else if timeRangeHours > 12 {
+			// 24h: 1 minute step (1440 points)
+			step = 1 * time.Minute
+		}
+		// Otherwise use default 30s step for short ranges (1h, 6h)
 	}
 
 	// Parse source parameter (default: "all")

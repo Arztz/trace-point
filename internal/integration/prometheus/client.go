@@ -719,8 +719,15 @@ func (c *Client) QueryTimelineMetrics(ctx context.Context, namespaces []string, 
 			namespace := parts[0]
 			podName := parts[1]
 
-			// Extract replicaset name from pod name
-			replicasetName := ExtractReplicasetName(podName)
+			// Use pod name as replicaset name (consistent with GetAvailablePods)
+			// When useDeploymentAggregation is enabled, podName is already the deployment name
+			// When disabled, the pod name is used directly for consistency
+			var replicasetName string
+			if c.useDeploymentAggregation {
+				replicasetName = podName
+			} else {
+				replicasetName = ExtractReplicasetName(podName)
+			}
 
 			// Apply replicaset filter if specified
 			if replicasetFilterMap != nil {
